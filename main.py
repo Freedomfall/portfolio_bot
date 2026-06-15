@@ -5,9 +5,14 @@ from pyrogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyb
 
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID"))
+API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+if not API_ID or not API_HASH or not BOT_TOKEN:
+    raise RuntimeError("Не найдены API_ID, API_HASH или BOT_TOKEN. Проверь файл .env или Variables на Railway.")
+
+API_ID = int(API_ID)
 
 app = Client(
     "portfolio_bot",
@@ -19,9 +24,56 @@ app = Client(
 keyboard = ReplyKeyboardMarkup(
     [
         ["👨‍💻 Обо мне", "🛠 Навыки"],
-        ["📂 Проекты", "📬 Контакты"]
+        ["📂 Проекты", "📬 Контакты"],
+        ["❓ Помощь"]
     ],
     resize_keyboard=True
+)
+
+start_links = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "🌐 GitHub",
+                url="https://github.com/Freedomfall"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📂 Код проекта",
+                url="https://github.com/Freedomfall/portfolio_bot"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 Написать мне",
+                url="https://t.me/freedomfall"
+            )
+        ]
+    ]
+)
+
+contacts_links = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(
+                "🌐 Мой GitHub",
+                url="https://github.com/Freedomfall"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📂 Репозиторий проекта",
+                url="https://github.com/Freedomfall/portfolio_bot"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 Telegram",
+                url="https://t.me/freedomfall"
+            )
+        ]
+    ]
 )
 
 
@@ -30,12 +82,34 @@ async def start(client, message):
     await message.reply_text(
         "Привет! 👋\n\n"
         "Я портфолио-бот начинающего Python-разработчика.\n"
+        "Я умею показывать информацию обо мне, мои навыки, проекты и контакты.\n\n"
         "Выбери раздел ниже:",
         reply_markup=keyboard
     )
 
+    await message.reply_text(
+        "🔗 Быстрые ссылки:",
+        reply_markup=start_links
+    )
 
-@app.on_message(filters.text & filters.private)
+
+@app.on_message(filters.command("help"))
+async def help_command(client, message):
+    await message.reply_text(
+        "❓ Помощь\n\n"
+        "Доступные команды:\n\n"
+        "/start — открыть главное меню\n"
+        "/help — показать помощь\n\n"
+        "Также можно пользоваться кнопками:\n"
+        "👨‍💻 Обо мне\n"
+        "🛠 Навыки\n"
+        "📂 Проекты\n"
+        "📬 Контакты",
+        reply_markup=keyboard
+    )
+
+
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "help"]))
 async def menu(client, message):
     text = message.text
 
@@ -54,7 +128,8 @@ async def menu(client, message):
             "• Telegram-боты\n"
             "• Работа с API\n"
             "• Git и GitHub\n"
-            "• Основы баз данных"
+            "• Основы баз данных\n"
+            "• Деплой проекта на Railway"
         )
 
     elif text == "📂 Проекты":
@@ -62,7 +137,9 @@ async def menu(client, message):
             "📂 Мои проекты\n\n"
             "1. Portfolio Bot — бот-визитка в Telegram\n"
             "2. Todo Bot — бот для задач, скоро\n"
-            "3. Weather Bot — бот погоды, скоро"
+            "3. Weather Bot — бот погоды, скоро\n\n"
+            "Код этого проекта:\n"
+            "https://github.com/Freedomfall/portfolio_bot"
         )
 
     elif text == "📬 Контакты":
@@ -71,28 +148,16 @@ async def menu(client, message):
             "Telegram: @freedomfall\n"
             "GitHub: https://github.com/Freedomfall\n"
             "Email: upvake@gmail.com",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "🌐 Мой GitHub",
-                            url="https://github.com/Freedomfall"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "📂 Репозиторий проекта",
-                            url="https://github.com/Freedomfall/portfolio_bot"
-                        )
-                    ]
-                ]
-            )
+            reply_markup=contacts_links
         )
+
+    elif text == "❓ Помощь":
+        await help_command(client, message)
 
     else:
         await message.reply_text(
-            "Я пока не понимаю эту команду 😅\n"
-            "Нажми одну из кнопок ниже.",
+            "Я пока не понимаю это сообщение 😅\n"
+            "Нажми одну из кнопок ниже или используй команду /help.",
             reply_markup=keyboard
         )
 
