@@ -134,6 +134,15 @@ def get_stats_text():
     return text
 
 
+def get_all_user_ids():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        users = cursor.fetchall()
+
+    return [user[0] for user in users]
+
+
 async def notify_admin_about_new_user(client, user, is_test=False):
     if ADMIN_ID is None or user is None:
         return
@@ -248,7 +257,8 @@ async def help_command(client, message):
         "/help — показать помощь\n"
         "/myid — узнать свой Telegram ID\n"
         "/stats — статистика бота, только для владельца\n"
-        "/test_notify — проверить уведомление админу\n\n"
+        "/test_notify — проверить уведомление админу\n"
+        "/broadcast текст — рассылка всем пользователям, только для владельца\n\n"
         "Также можно пользоваться кнопками:\n"
         "👨‍💻 Обо мне\n"
         "🛠 Навыки\n"
@@ -295,7 +305,51 @@ async def test_notify_command(client, message):
     await message.reply_text("✅ Тестовое уведомление отправлено админу.")
 
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "myid", "stats", "test_notify"]))
+@app.on_message(filters.command("broadcast"))
+async def broadcast_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    if len(message.command) < 2:
+        await message.reply_text(
+            "📢 Использование команды:\n\n"
+            "/broadcast текст сообщения\n\n"
+            "Пример:\n"
+            "/broadcast Привет! Я обновил бота 🚀"
+        )
+        return
+
+    broadcast_text = message.text.split(maxsplit=1)[1]
+    user_ids = get_all_user_ids()
+
+    sent_count = 0
+    failed_count = 0
+
+    for user_id in user_ids:
+        try:
+            await client.send_message(
+                user_id,
+                "📢 Сообщение от автора бота:\n\n"
+                f"{broadcast_text}"
+            )
+            sent_count += 1
+        except Exception as error:
+            failed_count += 1
+            print(f"Не удалось отправить сообщение пользователю {user_id}: {error}")
+
+    await message.reply_text(
+        "✅ Рассылка завершена\n\n"
+        f"Отправлено: {sent_count}\n"
+        f"Ошибок: {failed_count}"
+    )
+
+
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "myid", "stats", "test_notify", "broadcast"]))
 async def menu(client, message):
     text = message.text
 
