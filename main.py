@@ -1,4 +1,7 @@
 import os
+import sqlite3
+from datetime import datetime
+
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,11 +11,14 @@ load_dotenv()
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
+DB_PATH = os.getenv("DB_PATH", "bot_stats.db")
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
     raise RuntimeError("Не найдены API_ID, API_HASH или BOT_TOKEN. Проверь файл .env или Variables на Railway.")
 
 API_ID = int(API_ID)
+ADMIN_ID = int(ADMIN_ID) if ADMIN_ID else None
 
 app = Client(
     "portfolio_bot",
@@ -20,6 +26,106 @@ app = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
+
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                launches INTEGER DEFAULT 0,
+                first_seen TEXT,
+                last_seen TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_user(user):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    user_id = user.id
+    username = user.username or ""
+    first_name = user.first_name or ""
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT launches FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        existing_user = cursor.fetchone()
+
+        if existing_user:
+            cursor.execute(
+                """
+                UPDATE users
+                SET username = ?, first_name = ?, launches = launches + 1, last_seen = ?
+                WHERE user_id = ?
+                """,
+                (username, first_name, now, user_id)
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO users (user_id, username, first_name, launches, first_seen, last_seen)
+                VALUES (?, ?, ?, 1, ?, ?)
+                """,
+                (user_id, username, first_name, now, now)
+            )
+
+        conn.commit()
+
+
+def get_stats_text():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        cursor.execute("SELECT SUM(launches) FROM users")
+        total_launches = cursor.fetchone()[0] or 0
+
+        cursor.execute(
+            """
+            SELECT user_id, username, first_name, launches, last_seen
+            FROM users
+            ORDER BY last_seen DESC
+            LIMIT 5
+            """
+        )
+        last_users = cursor.fetchall()
+
+    text = (
+        "📊 Статистика бота\n\n"
+        f"👥 Уникальных пользователей: {total_users}\n"
+        f"🚀 Всего запусков /start: {total_launches}\n\n"
+        "Последние пользователи:\n"
+    )
+
+    if not last_users:
+        text += "Пока нет данных."
+        return text
+
+    for user_id, username, first_name, launches, last_seen in last_users:
+        if username:
+            user_label = f"@{username}"
+        elif first_name:
+            user_label = first_name
+        else:
+            user_label = str(user_id)
+
+        text += f"• {user_label} — запусков: {launches}, последний раз: {last_seen}\n"
+
+    return text
+
 
 keyboard = ReplyKeyboardMarkup(
     [
@@ -79,6 +185,8 @@ contacts_links = InlineKeyboardMarkup(
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
+    save_user(message.from_user)
+
     await message.reply_text(
         "Привет! 👋\n\n"
         "Я портфолио-бот начинающего Python-разработчика.\n"
@@ -99,7 +207,9 @@ async def help_command(client, message):
         "❓ Помощь\n\n"
         "Доступные команды:\n\n"
         "/start — открыть главное меню\n"
-        "/help — показать помощь\n\n"
+        "/help — показать помощь\n"
+        "/myid — узнать свой Telegram ID\n"
+        "/stats — статистика бота, только для владельца\n\n"
         "Также можно пользоваться кнопками:\n"
         "👨‍💻 Обо мне\n"
         "🛠 Навыки\n"
@@ -109,7 +219,30 @@ async def help_command(client, message):
     )
 
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "help"]))
+@app.on_message(filters.command("myid"))
+async def myid_command(client, message):
+    await message.reply_text(
+        f"🆔 Твой Telegram ID:\n\n`{message.from_user.id}`"
+    )
+
+
+@app.on_message(filters.command("stats"))
+async def stats_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text(
+            "⚠️ ADMIN_ID пока не задан.\n\n"
+            "Напиши команду /myid, скопируй свой Telegram ID и добавь его в Railway Variables как ADMIN_ID."
+        )
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к статистике.")
+        return
+
+    await message.reply_text(get_stats_text())
+
+
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "myid", "stats"]))
 async def menu(client, message):
     text = message.text
 
@@ -162,4 +295,5 @@ async def menu(client, message):
         )
 
 
+init_db()
 app.run()

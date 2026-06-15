@@ -3,3 +3,4 @@ venv/
 __pycache__/
 *.session
 *.session-journal
+bot_stats.db
