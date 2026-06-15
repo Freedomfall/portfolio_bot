@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from pyrogram import Client, filters
-from pyrogram.types import ReplyKeyboardMarkup
+from pyrogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 
 load_dotenv()
 
@@ -42,7 +42,7 @@ async def menu(client, message):
     if text == "👨‍💻 Обо мне":
         await message.reply_text(
             "👨‍💻 Обо мне\n\n"
-            "Привет! Меня зовут eXost.\n"
+            "Привет! Меня зовут Freedomfall.\n"
             "Я изучаю Python и создаю Telegram-ботов.\n\n"
             "Этот бот — мой первый проект для портфолио."
         )
@@ -70,7 +70,23 @@ async def menu(client, message):
             "📬 Контакты\n\n"
             "Telegram: @freedomfall\n"
             "GitHub: https://github.com/Freedomfall\n"
-            "Email: upvake@gmail.com"
+            "Email: upvake@gmail.com",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🌐 Мой GitHub",
+                            url="https://github.com/Freedomfall"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "📂 Репозиторий проекта",
+                            url="https://github.com/Freedomfall/portfolio_bot"
+                        )
+                    ]
+                ]
+            )
         )
 
     else:
