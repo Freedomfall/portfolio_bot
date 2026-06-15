@@ -6,6 +6,10 @@
 
 ## Что умеет бот
 
+- Поддерживает команду /myid
+- Поддерживает админ-команду /stats
+- Сохраняет статистику пользователей в SQLite
+- Использует Railway Volume для хранения базы данных
 - Показывает информацию обо мне
 - Показывает список навыков
 - Показывает проекты
@@ -18,6 +22,8 @@
 
 ## Технологии
 
+- SQLite
+- Railway Volume
 - Python
 - Pyrogram
 - python-dotenv
@@ -74,6 +80,8 @@ pip install -r requirements.txt
 API_ID=your_api_id
 API_HASH=your_api_hash
 BOT_TOKEN=your_bot_token
+ADMIN_ID=your_telegram_id
+DB_PATH=/data/bot_stats.db
 ```
 
 7. Запустить бота:
