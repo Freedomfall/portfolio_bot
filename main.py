@@ -47,6 +47,9 @@ def init_db():
 
 
 def save_user(user):
+    if user is None:
+        return False
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     user_id = user.id
@@ -61,6 +64,8 @@ def save_user(user):
             (user_id,)
         )
         existing_user = cursor.fetchone()
+
+        is_new_user = existing_user is None
 
         if existing_user:
             cursor.execute(
@@ -81,6 +86,8 @@ def save_user(user):
             )
 
         conn.commit()
+
+    return is_new_user
 
 
 def get_stats_text():
@@ -125,6 +132,34 @@ def get_stats_text():
         text += f"• {user_label} — запусков: {launches}, последний раз: {last_seen}\n"
 
     return text
+
+
+async def notify_admin_about_new_user(client, user, is_test=False):
+    if ADMIN_ID is None or user is None:
+        return
+
+    if user.id == ADMIN_ID and not is_test:
+        return
+
+    username = f"@{user.username}" if user.username else "не указан"
+    first_name = user.first_name or "не указано"
+    user_id = user.id
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    title = "🧪 Тестовое уведомление" if is_test else "👤 Новый пользователь"
+
+    text = (
+        f"{title}\n\n"
+        f"Имя: {first_name}\n"
+        f"Username: {username}\n"
+        f"ID: {user_id}\n"
+        f"Дата: {now}"
+    )
+
+    try:
+        await client.send_message(ADMIN_ID, text)
+    except Exception as error:
+        print(f"Не удалось отправить уведомление админу: {error}")
 
 
 keyboard = ReplyKeyboardMarkup(
@@ -185,7 +220,10 @@ contacts_links = InlineKeyboardMarkup(
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    save_user(message.from_user)
+    is_new_user = save_user(message.from_user)
+
+    if is_new_user:
+        await notify_admin_about_new_user(client, message.from_user)
 
     await message.reply_text(
         "Привет! 👋\n\n"
@@ -209,7 +247,8 @@ async def help_command(client, message):
         "/start — открыть главное меню\n"
         "/help — показать помощь\n"
         "/myid — узнать свой Telegram ID\n"
-        "/stats — статистика бота, только для владельца\n\n"
+        "/stats — статистика бота, только для владельца\n"
+        "/test_notify — проверить уведомление админу\n\n"
         "Также можно пользоваться кнопками:\n"
         "👨‍💻 Обо мне\n"
         "🛠 Навыки\n"
@@ -242,7 +281,21 @@ async def stats_command(client, message):
     await message.reply_text(get_stats_text())
 
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "myid", "stats"]))
+@app.on_message(filters.command("test_notify"))
+async def test_notify_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    await notify_admin_about_new_user(client, message.from_user, is_test=True)
+    await message.reply_text("✅ Тестовое уведомление отправлено админу.")
+
+
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "help", "myid", "stats", "test_notify"]))
 async def menu(client, message):
     text = message.text
 
