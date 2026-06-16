@@ -24,6 +24,7 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = os.getenv("DB_PATH", "bot_stats.db")
+COIN_GIF_URL = os.getenv("COIN_GIF_URL", "")
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
     raise RuntimeError(
@@ -289,6 +290,16 @@ def get_coin_text():
 
 
 async def send_coin_animation(message):
+    if COIN_GIF_URL:
+        await message.reply_animation(
+            COIN_GIF_URL,
+            caption="🪙 Подбрасываю монетку..."
+        )
+
+        await asyncio.sleep(2)
+        await message.reply_text(get_coin_text())
+        return
+
     coin_message = await message.reply_text("🪙 Подбрасываю монетку.")
 
     await asyncio.sleep(0.5)
