@@ -253,6 +253,14 @@ def get_coin_text():
         f"{emoji} Результат: {result}"
     )
 
+def get_dice_text():
+    number = random.randint(1, 6)
+
+    return (
+        "🎲 Бросаю кубик...\n\n"
+        f"Выпало число: {number}"
+    )
+
 def get_version_text():
     return (
         "🚀 Версия бота\n\n"
@@ -499,7 +507,8 @@ keyboard = ReplyKeyboardMarkup(
         ["📂 Проекты", "📬 Контакты"],
         ["ℹ️ О проекте", "💬 Связаться"],
         ["🚀 Версия", "🧭 Roadmap"],
-        ["🪙 Монетка", "❓ Помощь"]
+        ["🪙 Монетка", "🎲 Кубик"],
+        ["❓ Помощь"]
     ],
     resize_keyboard=True
 )
@@ -638,6 +647,7 @@ async def help_command(client, message):
         "/start — открыть главное меню\n"
 	"/backup_db — скачать резервную копию базы, только для владельца\n"
         "/help — показать помощь\n"
+        "/dice — бросить кубик от 1 до 6\n"
         "/about_project — техническое описание проекта\n"
 	"/ping — проверить работу бота и uptime\n"
         "/coin — подбросить монетку Орёл или Решка\n"
@@ -685,6 +695,11 @@ async def about_project_command(client, message):
 @handle_errors
 async def coin_command(client, message):
     await message.reply_text(get_coin_text())
+
+@app.on_message(filters.command("dice"))
+@handle_errors
+async def dice_command(client, message):
+    await message.reply_text(get_dice_text())
 
 @app.on_message(filters.command("version"))
 @handle_errors
@@ -1054,6 +1069,7 @@ async def broadcast_command(client, message):
             "about_project",
             "ping",
 	    "coin",
+            "dice",
             "myid",
             "stats",
             "admin",
@@ -1136,6 +1152,9 @@ async def menu(client, message):
 
     elif text == "🪙 Монетка":
         await message.reply_text(get_coin_text())
+
+    elif text == "🎲 Кубик":
+        await message.reply_text(get_dice_text())
 
     elif text == "❓ Помощь":
         await help_command(client, message)
