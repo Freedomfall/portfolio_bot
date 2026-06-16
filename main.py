@@ -40,6 +40,8 @@ app = Client(
 )
 
 START_TIME = datetime.now()
+BOT_VERSION = "1.1.0"
+LAST_UPDATE = "2026-06-16"
 
 def ensure_db_folder_exists():
     folder = os.path.dirname(DB_PATH)
@@ -236,6 +238,36 @@ def get_last_feedback_text(limit=5):
         )
 
     return text
+
+def get_version_text():
+    return (
+        "🚀 Версия бота\n\n"
+        f"Версия: {BOT_VERSION}\n"
+        f"Последнее обновление: {LAST_UPDATE}\n\n"
+        "Что уже реализовано:\n"
+        "• Портфолио-меню\n"
+        "• SQLite-статистика\n"
+        "• Админ-панель\n"
+        "• Обратная связь\n"
+        "• Рассылка пользователям\n"
+        "• CSV-экспорт\n"
+        "• Backup базы данных\n"
+        "• Railway Deploy 24/7"
+    )
+
+
+def get_roadmap_text():
+    return (
+        "🧭 Roadmap проекта\n\n"
+        "Планы развития:\n"
+        "• Антиспам для feedback\n"
+        "• Красивые карточки проектов\n"
+        "• Поддержка нескольких языков\n"
+        "• Логирование действий админа\n"
+        "• Второй проект: Todo Bot\n"
+        "• Третий проект: Weather Bot\n\n"
+        "Проект постоянно развивается 🚀"
+    )
 
 def get_uptime_text():
     now = datetime.now()
@@ -452,6 +484,7 @@ keyboard = ReplyKeyboardMarkup(
         ["👨‍💻 Обо мне", "🛠 Навыки"],
         ["📂 Проекты", "📬 Контакты"],
         ["ℹ️ О проекте", "💬 Связаться"],
+        ["🚀 Версия", "🧭 Roadmap"],
         ["❓ Помощь"]
     ],
     resize_keyboard=True
@@ -597,6 +630,8 @@ async def help_command(client, message):
         "/myid — узнать свой Telegram ID\n"
         "/stats — статистика бота, только для владельца\n"
         "/test_notify — проверить уведомление админу\n"
+        "/version — версия бота и последнее обновление\n"
+        "/roadmap — планы развития проекта\n"
         "/broadcast текст — рассылка всем пользователям, только для владельца\n"
         "/reply user_id текст — ответить пользователю, только для владельца\n"
 	"/export_users — выгрузить пользователей в CSV, только для владельца\n"
@@ -631,6 +666,16 @@ async def about_project_command(client, message):
         "https://github.com/Freedomfall/portfolio_bot"
     )
 
+@app.on_message(filters.command("version"))
+@handle_errors
+async def version_command(client, message):
+    await message.reply_text(get_version_text())
+
+
+@app.on_message(filters.command("roadmap"))
+@handle_errors
+async def roadmap_command(client, message):
+    await message.reply_text(get_roadmap_text())
 @app.on_message(filters.command("ping"))
 @handle_errors
 async def ping_command(client, message):
@@ -995,6 +1040,8 @@ async def broadcast_command(client, message):
             "feedback",
             "reply",
             "broadcast",
+	    "version",
+            "roadmap",
 	    "export_users",
             "export_feedback",
 	    "last_feedback",
@@ -1059,6 +1106,12 @@ async def menu(client, message):
             "Пример:\n"
             "`/feedback Привет! Хочу обсудить Telegram-бота.`"
         )
+
+    elif text == "🚀 Версия":
+        await message.reply_text(get_version_text())
+
+    elif text == "🧭 Roadmap":
+        await message.reply_text(get_roadmap_text())
 
     elif text == "❓ Помощь":
         await help_command(client, message)
