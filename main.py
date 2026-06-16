@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import traceback
+from contextlib import contextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -18,6 +19,10 @@ from pyrogram.types import (
 )
 
 load_dotenv()
+
+# =========================
+# CONFIG
+# =========================
 
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
@@ -32,8 +37,15 @@ if not API_ID or not API_HASH or not BOT_TOKEN:
         "Проверь файл .env или Variables на Railway."
     )
 
-API_ID = int(API_ID)
-ADMIN_ID = int(ADMIN_ID) if ADMIN_ID else None
+try:
+    API_ID = int(API_ID)
+except ValueError as error:
+    raise RuntimeError("API_ID должен быть числом.") from error
+
+try:
+    ADMIN_ID = int(ADMIN_ID) if ADMIN_ID else None
+except ValueError as error:
+    raise RuntimeError("ADMIN_ID должен быть числом.") from error
 
 app = Client(
     "portfolio_bot",
@@ -42,12 +54,94 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
+# =========================
+# STANDARDS / LIMITS
+# =========================
+
 START_TIME = datetime.now()
-BOT_VERSION = "1.1.0"
+BOT_VERSION = "1.2.0"
 LAST_UPDATE = "2026-06-16"
+
 FEEDBACK_COOLDOWN_SECONDS = 60
 GLOBAL_RATE_LIMIT_SECONDS = 2
+MAX_FEEDBACK_LENGTH = 1500
+MAX_BROADCAST_LENGTH = 3500
+MAX_REPLY_LENGTH = 3500
+ADMIN_LOGS_LIMIT = 10
+
 USER_LAST_ACTION = {}
+
+
+PUBLIC_COMMANDS = {
+    "start": "открыть главное меню",
+    "menu": "показать главное меню",
+    "help": "показать помощь",
+    "about_project": "техническое описание проекта",
+    "privacy": "какие данные хранит бот",
+    "version": "версия бота и последнее обновление",
+    "roadmap": "планы развития проекта",
+    "ping": "проверить работу бота и uptime",
+    "status": "короткий статус бота",
+    "health": "технический health-check",
+    "coin": "подбросить монетку Орёл или Решка",
+    "dice": "бросить кубик от 1 до 6",
+    "profile": "посмотреть свою статистику в боте",
+    "myid": "узнать свой Telegram ID",
+    "feedback": "написать автору бота: /feedback текст",
+}
+
+ADMIN_COMMANDS = {
+    "admin": "админ-панель, только для владельца",
+    "stats": "статистика бота, только для владельца",
+    "test_notify": "проверить уведомление админу",
+    "broadcast": "рассылка всем пользователям: /broadcast текст",
+    "reply": "ответить пользователю: /reply user_id текст",
+    "export_users": "выгрузить пользователей в CSV",
+    "export_feedback": "выгрузить обратную связь в CSV",
+    "last_feedback": "последние сообщения обратной связи",
+    "backup_db": "скачать резервную копию базы",
+    "admin_logs": "последние действия админа",
+}
+
+ALL_COMMANDS = list(PUBLIC_COMMANDS.keys()) + list(ADMIN_COMMANDS.keys())
+
+
+# =========================
+# SMALL HELPERS
+# =========================
+
+def now_text():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def truncate_text(text, max_length):
+    if text is None:
+        return ""
+
+    text = str(text).strip()
+
+    if len(text) <= max_length:
+        return text
+
+    return text[:max_length] + "..."
+
+
+def is_admin_user_id(user_id):
+    return ADMIN_ID is not None and user_id == ADMIN_ID
+
+
+def get_user_label(user_id=None, username=None, first_name=None):
+    if username:
+        return f"@{username}"
+
+    if first_name:
+        return first_name
+
+    if user_id is not None:
+        return str(user_id)
+
+    return "неизвестный пользователь"
+
 
 def ensure_db_folder_exists():
     folder = os.path.dirname(DB_PATH)
@@ -56,10 +150,26 @@ def ensure_db_folder_exists():
         os.makedirs(folder, exist_ok=True)
 
 
-def init_db():
+@contextmanager
+def db_connection():
     ensure_db_folder_exists()
 
-    with sqlite3.connect(DB_PATH) as conn:
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# =========================
+# DATABASE
+# =========================
+
+def init_db():
+    with db_connection() as conn:
         cursor = conn.cursor()
 
         cursor.execute(
@@ -88,20 +198,30 @@ def init_db():
             """
         )
 
-        conn.commit()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                action TEXT,
+                details TEXT,
+                created_at TEXT
+            )
+            """
+        )
 
 
 def save_user(user):
     if user is None:
         return False
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = now_text()
 
     user_id = user.id
     username = user.username or ""
     first_name = user.first_name or ""
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
 
         cursor.execute(
@@ -119,7 +239,7 @@ def save_user(user):
                 SET username = ?, first_name = ?, launches = launches + 1, last_seen = ?
                 WHERE user_id = ?
                 """,
-                (username, first_name, now, user_id)
+                (username, first_name, current_time, user_id)
             )
         else:
             cursor.execute(
@@ -127,18 +247,85 @@ def save_user(user):
                 INSERT INTO users (user_id, username, first_name, launches, first_seen, last_seen)
                 VALUES (?, ?, ?, 1, ?, ?)
                 """,
-                (user_id, username, first_name, now, now)
+                (user_id, username, first_name, current_time, current_time)
             )
-
-        conn.commit()
 
     return is_new_user
 
 
-def save_feedback(user, message_text):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def ensure_user_record(user):
+    if user is None:
+        return False
 
-    with sqlite3.connect(DB_PATH) as conn:
+    current_time = now_text()
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT user_id FROM users WHERE user_id = ?",
+            (user.id,)
+        )
+        existing_user = cursor.fetchone()
+
+        if existing_user:
+            cursor.execute(
+                """
+                UPDATE users
+                SET username = ?, first_name = ?, last_seen = ?
+                WHERE user_id = ?
+                """,
+                (
+                    user.username or "",
+                    user.first_name or "",
+                    current_time,
+                    user.id
+                )
+            )
+            return False
+
+        cursor.execute(
+            """
+            INSERT INTO users (user_id, username, first_name, launches, first_seen, last_seen)
+            VALUES (?, ?, ?, 0, ?, ?)
+            """,
+            (
+                user.id,
+                user.username or "",
+                user.first_name or "",
+                current_time,
+                current_time
+            )
+        )
+        return True
+
+
+def touch_user(user):
+    if user is None:
+        return
+
+    current_time = now_text()
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET username = ?, first_name = ?, last_seen = ?
+            WHERE user_id = ?
+            """,
+            (
+                user.username or "",
+                user.first_name or "",
+                current_time,
+                user.id
+            )
+        )
+
+
+def save_feedback(user, message_text):
+    with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -150,13 +337,33 @@ def save_feedback(user, message_text):
                 user.username or "",
                 user.first_name or "",
                 message_text,
-                now
+                now_text()
             )
         )
-        conn.commit()
+
+
+def log_admin_action(admin_id, action, details=""):
+    if admin_id is None:
+        return
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO admin_logs (admin_id, action, details, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                admin_id,
+                truncate_text(action, 100),
+                truncate_text(details, 1000),
+                now_text()
+            )
+        )
+
 
 def get_feedback_wait_seconds(user_id):
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -178,16 +385,29 @@ def get_feedback_wait_seconds(user_id):
     except ValueError:
         return 0
 
-    now = datetime.now()
-    passed_seconds = int((now - last_feedback_time).total_seconds())
+    passed_seconds = int((datetime.now() - last_feedback_time).total_seconds())
 
     if passed_seconds >= FEEDBACK_COOLDOWN_SECONDS:
         return 0
 
     return FEEDBACK_COOLDOWN_SECONDS - passed_seconds
 
+
+def get_all_user_ids():
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        users = cursor.fetchall()
+
+    return [user[0] for user in users]
+
+
+# =========================
+# TEXT BUILDERS
+# =========================
+
 def get_stats_text():
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
 
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -198,6 +418,9 @@ def get_stats_text():
 
         cursor.execute("SELECT COUNT(*) FROM feedback")
         total_feedback = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM admin_logs")
+        total_admin_logs = cursor.fetchone()[0]
 
         cursor.execute(
             """
@@ -213,29 +436,23 @@ def get_stats_text():
         "📊 Статистика бота\n\n"
         f"👥 Уникальных пользователей: {total_users}\n"
         f"🚀 Всего запусков /start: {total_launches}\n"
-        f"💬 Сообщений обратной связи: {total_feedback}\n\n"
+        f"💬 Сообщений обратной связи: {total_feedback}\n"
+        f"🧾 Записей в admin logs: {total_admin_logs}\n\n"
         "Последние пользователи:\n"
     )
 
     if not last_users:
-        text += "Пока нет данных."
-        return text
+        return text + "Пока нет данных."
 
     for user_id, username, first_name, launches, last_seen in last_users:
-        if username:
-            user_label = f"@{username}"
-        elif first_name:
-            user_label = first_name
-        else:
-            user_label = str(user_id)
-
+        user_label = get_user_label(user_id, username, first_name)
         text += f"• {user_label} — запусков: {launches}, последний раз: {last_seen}\n"
 
     return text
 
 
 def get_last_feedback_text(limit=5):
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -254,51 +471,70 @@ def get_last_feedback_text(limit=5):
     text = "💬 Последние сообщения обратной связи\n\n"
 
     for user_id, username, first_name, message, created_at in rows:
-        if username:
-            user_label = f"@{username}"
-        elif first_name:
-            user_label = first_name
-        else:
-            user_label = str(user_id)
-
-        short_message = message
-
-        if len(short_message) > 300:
-            short_message = short_message[:300] + "..."
+        user_label = get_user_label(user_id, username, first_name)
+        short_message = truncate_text(message, 300)
 
         text += (
             f"👤 {user_label}\n"
-            f"ID: {user_id}\n"
+            f"ID: `{user_id}`\n"
             f"Дата: {created_at}\n"
             f"Сообщение: {short_message}\n\n"
         )
 
     return text
 
+
+def get_admin_logs_text(limit=ADMIN_LOGS_LIMIT):
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT admin_id, action, details, created_at
+            FROM admin_logs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        return "🧾 Admin logs\n\nПока нет записей."
+
+    text = "🧾 Последние действия админа\n\n"
+
+    for admin_id, action, details, created_at in rows:
+        text += (
+            f"• {created_at}\n"
+            f"  Admin ID: `{admin_id}`\n"
+            f"  Action: `{action}`\n"
+        )
+
+        if details:
+            text += f"  Details: {truncate_text(details, 250)}\n"
+
+        text += "\n"
+
+    return text
+
+
 def get_help_text():
+    public_lines = "\n".join(
+        f"/{command} — {description}"
+        for command, description in PUBLIC_COMMANDS.items()
+    )
+
+    admin_lines = "\n".join(
+        f"/{command} — {description}"
+        for command, description in ADMIN_COMMANDS.items()
+    )
+
     return (
         "❓ Помощь\n\n"
-        "Доступные команды:\n\n"
-        "/privacy — какие данные хранит бот\n"
-        "/start — открыть главное меню\n"
-        "/backup_db — скачать резервную копию базы, только для владельца\n"
-        "/help — показать помощь\n"
-        "/dice — бросить кубик от 1 до 6\n"
-        "/about_project — техническое описание проекта\n"
-        "/ping — проверить работу бота и uptime\n"
-        "/coin — подбросить монетку Орёл или Решка\n"
-        "/feedback текст — написать автору бота\n"
-        "/myid — узнать свой Telegram ID\n"
-        "/stats — статистика бота, только для владельца\n"
-        "/test_notify — проверить уведомление админу\n"
-        "/version — версия бота и последнее обновление\n"
-        "/roadmap — планы развития проекта\n"
-        "/broadcast текст — рассылка всем пользователям, только для владельца\n"
-        "/reply user_id текст — ответить пользователю, только для владельца\n"
-        "/export_users — выгрузить пользователей в CSV, только для владельца\n"
-        "/export_feedback — выгрузить обратную связь в CSV, только для владельца\n"
-        "/last_feedback — показать последние сообщения обратной связи, только для владельца\n"
-        "/admin — админ-панель, только для владельца\n\n"
+        "Публичные команды:\n\n"
+        f"{public_lines}\n\n"
+        "Команды владельца:\n\n"
+        f"{admin_lines}\n\n"
         "Также можно пользоваться кнопками меню."
     )
 
@@ -307,24 +543,19 @@ def get_about_project_text():
     return (
         "ℹ️ О проекте\n\n"
         "Этот бот — портфолио-проект на Python.\n\n"
-        "Техническая часть:\n"
-        "• Python\n"
-        "• Pyrogram\n"
-        "• SQLite\n"
-        "• Railway Deploy\n"
-        "• Railway Volume для базы данных\n"
-        "• Git и GitHub\n"
-        "• .env переменные для секретов\n"
-        "• Админ-команды\n"
-        "• Обратная связь от пользователей\n"
-        "• Антиспам для обратной связи\n"
-        "• Общая антиспам-защита команд и кнопок\n"
-        "• Рассылка всем пользователям\n"
-        "• CSV-экспорт\n"
+        "Стандарты и архитектура:\n"
+        "• Pyrogram async handlers\n"
+        "• SQLite с отдельными таблицами users, feedback и admin_logs\n"
+        "• Единая обработка ошибок\n"
+        "• Единая антиспам-защита для пользователей\n"
+        "• Ограничения длины feedback, reply и broadcast\n"
+        "• Централизованные тексты help/about/version\n"
+        "• Админ-панель с callback-кнопками\n"
+        "• Логирование действий админа\n"
+        "• CSV-экспорт пользователей и feedback\n"
         "• Backup базы данных\n"
-        "• Уведомления админу\n"
-        "• Обработка ошибок\n"
-        "• Мини-игры: монетка и кубик\n\n"
+        "• GIF/text fallback для игры с монеткой\n"
+        "• Railway Deploy 24/7 и Railway Volume\n\n"
         "Код проекта:\n"
         "https://github.com/Freedomfall/portfolio_bot"
     )
@@ -332,14 +563,10 @@ def get_about_project_text():
 
 def get_coin_text():
     result = random.choice(["Орёл", "Решка"])
-
-    if result == "Орёл":
-        emoji = "🦅"
-    else:
-        emoji = "🪙"
+    emoji = "🦅" if result == "Орёл" else "🪙"
 
     return (
-        "🪙 Подбрасываю монетку...\n\n"
+        "🪙 Монетка упала!\n\n"
         f"{emoji} Результат: {result}"
     )
 
@@ -370,6 +597,7 @@ async def send_coin_animation(message):
     await asyncio.sleep(0.5)
     await coin_message.edit_text(get_coin_text())
 
+
 def get_dice_text():
     number = random.randint(1, 6)
 
@@ -378,35 +606,46 @@ def get_dice_text():
         f"Выпало число: {number}"
     )
 
+
 def get_version_text():
     return (
         "🚀 Версия бота\n\n"
         f"Версия: {BOT_VERSION}\n"
         f"Последнее обновление: {LAST_UPDATE}\n\n"
-        "Что уже реализовано:\n"
-        "• Портфолио-меню\n"
-        "• SQLite-статистика\n"
-        "• Админ-панель\n"
-        "• Обратная связь\n"
-        "• Рассылка пользователям\n"
-        "• CSV-экспорт\n"
-        "• Backup базы данных\n"
-        "• Railway Deploy 24/7"
+        "Что нового в версии 1.2.0:\n"
+        "• Добавлены стандарты структуры кода\n"
+        "• Добавлена таблица admin_logs\n"
+        "• Добавлена команда /admin_logs\n"
+        "• Добавлены /menu, /profile, /status и /health\n"
+        "• Улучшена антиспам-защита\n"
+        "• Добавлены лимиты длины сообщений\n"
+        "• Улучшена анимация монетки с GIF fallback"
     )
 
 
 def get_roadmap_text():
     return (
         "🧭 Roadmap проекта\n\n"
-        "Планы развития:\n"
-        "• Антиспам для feedback\n"
-        "• Красивые карточки проектов\n"
+        "Реализовано сейчас:\n"
+        "• Портфолио-меню\n"
+        "• Статистика SQLite\n"
+        "• Админ-панель\n"
+        "• Feedback и reply\n"
+        "• Broadcast\n"
+        "• CSV export\n"
+        "• Backup базы\n"
+        "• Admin logs\n"
+        "• Общий антиспам\n"
+        "• Мини-игры\n\n"
+        "Следующие идеи:\n"
+        "• Карточки проектов с изображениями\n"
         "• Поддержка нескольких языков\n"
-        "• Логирование действий админа\n"
-        "• Второй проект: Todo Bot\n"
-        "• Третий проект: Weather Bot\n\n"
-        "Проект постоянно развивается 🚀"
+        "• Webhook-режим\n"
+        "• Отдельная таблица проектов\n"
+        "• Todo Bot как второй проект\n"
+        "• Weather Bot как третий проект"
     )
+
 
 def get_privacy_text():
     return (
@@ -423,10 +662,9 @@ def get_privacy_text():
         "@freedomfall"
     )
 
-def get_uptime_text():
-    now = datetime.now()
-    uptime = now - START_TIME
 
+def get_uptime_text():
+    uptime = datetime.now() - START_TIME
     total_seconds = int(uptime.total_seconds())
 
     days = total_seconds // 86400
@@ -437,10 +675,73 @@ def get_uptime_text():
     return (
         "🏓 Pong!\n\n"
         f"⏱ Uptime: {days}д {hours}ч {minutes}м {seconds}с\n"
-        f"🕒 Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}"
+        f"🕒 Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"🤖 Версия: {BOT_VERSION}"
     )
+
+
+def get_health_text():
+    db_status = "ok"
+
+    try:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception as error:
+        db_status = f"error: {error}"
+
+    return (
+        "🟢 Health-check\n\n"
+        f"Bot: ok\n"
+        f"DB: {db_status}\n"
+        f"Version: {BOT_VERSION}\n"
+        f"Time: {now_text()}"
+    )
+
+
+def get_profile_text(user):
+    if user is None:
+        return "👤 Профиль\n\nНе удалось определить пользователя."
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT username, first_name, launches, first_seen, last_seen
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user.id,)
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return (
+            "👤 Твой профиль\n\n"
+            f"ID: `{user.id}`\n"
+            "Ты ещё не запускал /start, поэтому статистики пока нет."
+        )
+
+    username, first_name, launches, first_seen, last_seen = row
+    user_label = get_user_label(user.id, username, first_name)
+
+    return (
+        "👤 Твой профиль в боте\n\n"
+        f"Пользователь: {user_label}\n"
+        f"ID: `{user.id}`\n"
+        f"Запусков /start: {launches}\n"
+        f"Первый запуск: {first_seen}\n"
+        f"Последняя активность: {last_seen}"
+    )
+
+
+# =========================
+# EXPORTS
+# =========================
+
 def create_users_export():
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -477,7 +778,7 @@ def create_users_export():
 
 
 def create_feedback_export():
-    with sqlite3.connect(DB_PATH) as conn:
+    with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -526,14 +827,10 @@ async def send_csv_file(client, chat_id, file_path, caption):
         except OSError:
             pass
 
-def get_all_user_ids():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        users = cursor.fetchall()
 
-    return [user[0] for user in users]
-
+# =========================
+# NOTIFICATIONS
+# =========================
 
 async def notify_admin_about_new_user(client, user, is_test=False):
     if ADMIN_ID is None or user is None:
@@ -544,17 +841,14 @@ async def notify_admin_about_new_user(client, user, is_test=False):
 
     username = f"@{user.username}" if user.username else "не указан"
     first_name = user.first_name or "не указано"
-    user_id = user.id
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     title = "🧪 Тестовое уведомление" if is_test else "👤 Новый пользователь"
 
     text = (
         f"{title}\n\n"
         f"Имя: {first_name}\n"
         f"Username: {username}\n"
-        f"ID: {user_id}\n"
-        f"Дата: {now}"
+        f"ID: `{user.id}`\n"
+        f"Дата: {now_text()}"
     )
 
     try:
@@ -564,7 +858,7 @@ async def notify_admin_about_new_user(client, user, is_test=False):
 
 
 async def notify_admin_about_feedback(client, user, feedback_text):
-    if ADMIN_ID is None:
+    if ADMIN_ID is None or user is None:
         return
 
     username = f"@{user.username}" if user.username else "не указан"
@@ -608,12 +902,27 @@ async def notify_admin_about_error(client, error, place="unknown"):
     except Exception as send_error:
         print(f"Не удалось отправить ошибку админу: {send_error}")
 
+
+# =========================
+# RATE LIMIT / ERRORS
+# =========================
+
 def get_user_id_from_update(update):
     if hasattr(update, "from_user") and update.from_user:
         return update.from_user.id
 
     if hasattr(update, "message") and update.message and update.message.from_user:
         return update.message.from_user.id
+
+    return None
+
+
+def get_user_from_update(update):
+    if hasattr(update, "from_user") and update.from_user:
+        return update.from_user
+
+    if hasattr(update, "message") and update.message and update.message.from_user:
+        return update.message.from_user
 
     return None
 
@@ -629,7 +938,6 @@ def get_global_rate_limit_wait_seconds(user_id):
     passed_seconds = now - last_action_time
 
     if passed_seconds < GLOBAL_RATE_LIMIT_SECONDS:
-        USER_LAST_ACTION[user_id] = now
         return max(1, int(GLOBAL_RATE_LIMIT_SECONDS - passed_seconds) + 1)
 
     USER_LAST_ACTION[user_id] = now
@@ -652,17 +960,21 @@ async def send_rate_limit_warning(update, wait_seconds):
     if hasattr(update, "reply_text"):
         await update.reply_text(text)
 
+
 def handle_errors(handler):
     async def wrapper(client, update):
         try:
             user_id = get_user_id_from_update(update)
 
-            if user_id is not None:
+            if user_id is not None and not is_admin_user_id(user_id):
                 wait_seconds = get_global_rate_limit_wait_seconds(user_id)
 
                 if wait_seconds > 0:
                     await send_rate_limit_warning(update, wait_seconds)
                     return
+
+            user = get_user_from_update(update)
+            touch_user(user)
 
             return await handler(client, update)
 
@@ -686,6 +998,10 @@ def handle_errors(handler):
     return wrapper
 
 
+# =========================
+# KEYBOARDS
+# =========================
+
 keyboard = ReplyKeyboardMarkup(
     [
         ["👨‍💻 Обо мне", "🛠 Навыки"],
@@ -694,7 +1010,7 @@ keyboard = ReplyKeyboardMarkup(
         ["🚀 Версия", "🧭 Roadmap"],
         ["🪙 Монетка", "🎲 Кубик"],
         ["📊 Статистика", "🔐 Privacy"],
-        ["❓ Помощь"]
+        ["👤 Профиль", "❓ Помощь"],
     ],
     resize_keyboard=True
 )
@@ -772,12 +1088,18 @@ admin_panel = InlineKeyboardMarkup(
     [
         [
             InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
-        ], 
-        [
-   	    InlineKeyboardButton("🗄 Backup базы", callback_data="admin_backup_db")
         ],
         [
             InlineKeyboardButton("🏓 Ping / Uptime", callback_data="admin_ping")
+        ],
+        [
+            InlineKeyboardButton("🟢 Health-check", callback_data="admin_health")
+        ],
+        [
+            InlineKeyboardButton("🧾 Admin logs", callback_data="admin_logs")
+        ],
+        [
+            InlineKeyboardButton("🗄 Backup базы", callback_data="admin_backup_db")
         ],
         [
             InlineKeyboardButton("📥 Экспорт пользователей", callback_data="admin_export_users")
@@ -801,6 +1123,10 @@ admin_panel = InlineKeyboardMarkup(
 )
 
 
+# =========================
+# HANDLERS
+# =========================
+
 @app.on_message(filters.command("start"))
 @handle_errors
 async def start(client, message):
@@ -812,8 +1138,8 @@ async def start(client, message):
     await message.reply_text(
         "Привет! 👋\n\n"
         "Я портфолио-бот Python-разработчика.\n"
-        "Я умею показывать проекты, принимать сообщения, собирать статистику "
-        "и работать с админ-панелью.\n\n"
+        "Я умею показывать проекты, принимать сообщения, собирать статистику, "
+        "работать с админ-панелью и вести admin logs.\n\n"
         "Выбери раздел ниже:",
         reply_markup=keyboard
     )
@@ -821,6 +1147,15 @@ async def start(client, message):
     await message.reply_text(
         "🔗 Быстрые ссылки:",
         reply_markup=start_links
+    )
+
+
+@app.on_message(filters.command("menu"))
+@handle_errors
+async def menu_command(client, message):
+    await message.reply_text(
+        "📋 Главное меню открыто.",
+        reply_markup=keyboard
     )
 
 
@@ -844,15 +1179,19 @@ async def about_project_command(client, message):
 async def coin_command(client, message):
     await send_coin_animation(message)
 
+
 @app.on_message(filters.command("dice"))
 @handle_errors
 async def dice_command(client, message):
     await message.reply_text(get_dice_text())
 
+
 @app.on_message(filters.command("privacy"))
 @handle_errors
 async def privacy_command(client, message):
     await message.reply_text(get_privacy_text())
+
+
 @app.on_message(filters.command("version"))
 @handle_errors
 async def version_command(client, message):
@@ -863,10 +1202,25 @@ async def version_command(client, message):
 @handle_errors
 async def roadmap_command(client, message):
     await message.reply_text(get_roadmap_text())
-@app.on_message(filters.command("ping"))
+
+
+@app.on_message(filters.command(["ping", "status", "health"]))
 @handle_errors
 async def ping_command(client, message):
+    command = message.command[0].lower()
+
+    if command == "health":
+        await message.reply_text(get_health_text())
+        return
+
     await message.reply_text(get_uptime_text())
+
+
+@app.on_message(filters.command(["profile", "me"]))
+@handle_errors
+async def profile_command(client, message):
+    await message.reply_text(get_profile_text(message.from_user))
+
 
 @app.on_message(filters.command("myid"))
 @handle_errors
@@ -879,18 +1233,11 @@ async def myid_command(client, message):
 @app.on_message(filters.command("stats"))
 @handle_errors
 async def stats_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text(
-            "⚠️ ADMIN_ID пока не задан.\n\n"
-            "Напиши команду /myid, скопируй свой Telegram ID "
-            "и добавь его в Railway Variables как ADMIN_ID."
-        )
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к статистике.")
         return
 
+    log_admin_action(message.from_user.id, "stats", "Открыта статистика через команду /stats")
     await message.reply_text(get_stats_text())
 
 
@@ -901,9 +1248,11 @@ async def admin_command(client, message):
         await message.reply_text("⚠️ ADMIN_ID пока не задан.")
         return
 
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к админ-панели.")
         return
+
+    log_admin_action(message.from_user.id, "admin_panel", "Открыта админ-панель")
 
     await message.reply_text(
         "🛠 Админ-панель\n\n"
@@ -911,10 +1260,11 @@ async def admin_command(client, message):
         reply_markup=admin_panel
     )
 
+
 @app.on_callback_query()
 @handle_errors
 async def callback_handler(client, callback_query):
-    if ADMIN_ID is None or callback_query.from_user.id != ADMIN_ID:
+    if ADMIN_ID is None or not is_admin_user_id(callback_query.from_user.id):
         await callback_query.answer("⛔ Нет доступа", show_alert=True)
         return
 
@@ -922,15 +1272,28 @@ async def callback_handler(client, callback_query):
 
     if data == "admin_stats":
         await callback_query.answer("Готово")
+        log_admin_action(callback_query.from_user.id, "admin_stats", "Статистика из админ-панели")
         await callback_query.message.reply_text(get_stats_text())
 
     elif data == "admin_ping":
         await callback_query.answer("Pong")
+        log_admin_action(callback_query.from_user.id, "admin_ping", "Ping из админ-панели")
         await callback_query.message.reply_text(get_uptime_text())
+
+    elif data == "admin_health":
+        await callback_query.answer("Health-check")
+        log_admin_action(callback_query.from_user.id, "admin_health", "Health-check из админ-панели")
+        await callback_query.message.reply_text(get_health_text())
+
+    elif data == "admin_logs":
+        await callback_query.answer("Готово")
+        log_admin_action(callback_query.from_user.id, "admin_logs", "Просмотр admin logs из админ-панели")
+        await callback_query.message.reply_text(get_admin_logs_text())
 
     elif data == "admin_export_users":
         await callback_query.answer("Готовлю файл")
         file_path, rows_count = create_users_export()
+        log_admin_action(callback_query.from_user.id, "export_users", f"Экспортировано пользователей: {rows_count}")
 
         await send_csv_file(
             client,
@@ -942,6 +1305,7 @@ async def callback_handler(client, callback_query):
     elif data == "admin_export_feedback":
         await callback_query.answer("Готовлю файл")
         file_path, rows_count = create_feedback_export()
+        log_admin_action(callback_query.from_user.id, "export_feedback", f"Экспортировано feedback: {rows_count}")
 
         await send_csv_file(
             client,
@@ -952,10 +1316,12 @@ async def callback_handler(client, callback_query):
 
     elif data == "admin_last_feedback":
         await callback_query.answer("Готово")
+        log_admin_action(callback_query.from_user.id, "last_feedback", "Просмотр последних feedback")
         await callback_query.message.reply_text(get_last_feedback_text())
 
     elif data == "admin_backup_db":
         await callback_query.answer("Готовлю backup")
+        log_admin_action(callback_query.from_user.id, "backup_db", "Backup базы из админ-панели")
 
         if not os.path.exists(DB_PATH):
             await callback_query.message.reply_text("⚠️ Файл базы данных пока не найден.")
@@ -969,6 +1335,7 @@ async def callback_handler(client, callback_query):
 
     elif data == "admin_test_notify":
         await callback_query.answer("Отправляю тест")
+        log_admin_action(callback_query.from_user.id, "test_notify", "Тест уведомления из админ-панели")
         await notify_admin_about_new_user(
             client,
             callback_query.from_user,
@@ -982,6 +1349,7 @@ async def callback_handler(client, callback_query):
             "📢 Рассылка\n\n"
             "Используй команду:\n"
             "`/broadcast текст сообщения`\n\n"
+            f"Максимальная длина: {MAX_BROADCAST_LENGTH} символов.\n\n"
             "Пример:\n"
             "`/broadcast Привет! Я обновил бота 🚀`"
         )
@@ -992,21 +1360,23 @@ async def callback_handler(client, callback_query):
             "💬 Ответ пользователю\n\n"
             "Используй команду:\n"
             "`/reply user_id текст ответа`\n\n"
+            f"Максимальная длина: {MAX_REPLY_LENGTH} символов.\n\n"
             "Пример:\n"
             "`/reply 123456789 Привет! Спасибо за сообщение.`"
         )
 
+    else:
+        await callback_query.answer("Неизвестное действие", show_alert=False)
+
+
 @app.on_message(filters.command("test_notify"))
 @handle_errors
 async def test_notify_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
+    log_admin_action(message.from_user.id, "test_notify", "Тест уведомления через команду")
     await notify_admin_about_new_user(client, message.from_user, is_test=True)
     await message.reply_text("✅ Тестовое уведомление отправлено админу.")
 
@@ -1032,9 +1402,21 @@ async def feedback_command(client, message):
         )
         return
 
-    feedback_text = message.text.split(maxsplit=1)[1]
+    feedback_text = message.text.split(maxsplit=1)[1].strip()
 
-    save_user(message.from_user)
+    if not feedback_text:
+        await message.reply_text("⚠️ Сообщение не должно быть пустым.")
+        return
+
+    if len(feedback_text) > MAX_FEEDBACK_LENGTH:
+        await message.reply_text(
+            "⚠️ Сообщение слишком длинное.\n\n"
+            f"Максимум: {MAX_FEEDBACK_LENGTH} символов.\n"
+            f"Сейчас: {len(feedback_text)} символов."
+        )
+        return
+
+    ensure_user_record(message.from_user)
     save_feedback(message.from_user, feedback_text)
 
     await notify_admin_about_feedback(client, message.from_user, feedback_text)
@@ -1048,11 +1430,7 @@ async def feedback_command(client, message):
 @app.on_message(filters.command("reply"))
 @handle_errors
 async def reply_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
@@ -1073,7 +1451,18 @@ async def reply_command(client, message):
         await message.reply_text("⚠️ user_id должен быть числом.")
         return
 
-    reply_text = parts[2]
+    reply_text = parts[2].strip()
+
+    if not reply_text:
+        await message.reply_text("⚠️ Текст ответа не должен быть пустым.")
+        return
+
+    if len(reply_text) > MAX_REPLY_LENGTH:
+        await message.reply_text(
+            "⚠️ Ответ слишком длинный.\n\n"
+            f"Максимум: {MAX_REPLY_LENGTH} символов."
+        )
+        return
 
     try:
         await client.send_message(
@@ -1081,18 +1470,20 @@ async def reply_command(client, message):
             "💬 Ответ от автора бота:\n\n"
             f"{reply_text}"
         )
+        log_admin_action(
+            message.from_user.id,
+            "reply",
+            f"Ответ пользователю {target_user_id}: {truncate_text(reply_text, 250)}"
+        )
         await message.reply_text("✅ Ответ отправлен пользователю.")
     except Exception as error:
         await message.reply_text(f"⚠️ Не удалось отправить ответ: {error}")
 
+
 @app.on_message(filters.command("backup_db"))
 @handle_errors
 async def backup_db_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
@@ -1100,37 +1491,46 @@ async def backup_db_command(client, message):
         await message.reply_text("⚠️ Файл базы данных пока не найден.")
         return
 
+    log_admin_action(message.from_user.id, "backup_db", "Backup базы через команду")
+
     await client.send_document(
         message.chat.id,
         DB_PATH,
         caption="🗄 Резервная копия базы данных"
     )
 
+
 @app.on_message(filters.command("last_feedback"))
 @handle_errors
 async def last_feedback_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
+    log_admin_action(message.from_user.id, "last_feedback", "Просмотр последних feedback через команду")
     await message.reply_text(get_last_feedback_text())
+
+
+@app.on_message(filters.command("admin_logs"))
+@handle_errors
+async def admin_logs_command(client, message):
+    if not is_admin_user_id(message.from_user.id):
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    log_admin_action(message.from_user.id, "admin_logs", "Просмотр admin logs через команду")
+    await message.reply_text(get_admin_logs_text())
+
 
 @app.on_message(filters.command("export_users"))
 @handle_errors
 async def export_users_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
     file_path, rows_count = create_users_export()
+    log_admin_action(message.from_user.id, "export_users", f"Экспортировано пользователей: {rows_count}")
 
     await send_csv_file(
         client,
@@ -1143,15 +1543,12 @@ async def export_users_command(client, message):
 @app.on_message(filters.command("export_feedback"))
 @handle_errors
 async def export_feedback_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
     file_path, rows_count = create_feedback_export()
+    log_admin_action(message.from_user.id, "export_feedback", f"Экспортировано feedback: {rows_count}")
 
     await send_csv_file(
         client,
@@ -1160,14 +1557,11 @@ async def export_feedback_command(client, message):
         f"💬 Экспорт обратной связи\n\nЗаписей: {rows_count}"
     )
 
+
 @app.on_message(filters.command("broadcast"))
 @handle_errors
 async def broadcast_command(client, message):
-    if ADMIN_ID is None:
-        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-        return
-
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin_user_id(message.from_user.id):
         await message.reply_text("⛔ У тебя нет доступа к этой команде.")
         return
 
@@ -1180,7 +1574,19 @@ async def broadcast_command(client, message):
         )
         return
 
-    broadcast_text = message.text.split(maxsplit=1)[1]
+    broadcast_text = message.text.split(maxsplit=1)[1].strip()
+
+    if not broadcast_text:
+        await message.reply_text("⚠️ Текст рассылки не должен быть пустым.")
+        return
+
+    if len(broadcast_text) > MAX_BROADCAST_LENGTH:
+        await message.reply_text(
+            "⚠️ Текст рассылки слишком длинный.\n\n"
+            f"Максимум: {MAX_BROADCAST_LENGTH} символов."
+        )
+        return
+
     user_ids = get_all_user_ids()
 
     sent_count = 0
@@ -1194,6 +1600,7 @@ async def broadcast_command(client, message):
                 f"{broadcast_text}"
             )
             sent_count += 1
+            await asyncio.sleep(0.05)
 
         except FloodWait as error:
             await asyncio.sleep(error.value)
@@ -1213,6 +1620,12 @@ async def broadcast_command(client, message):
             failed_count += 1
             print(f"Не удалось отправить сообщение пользователю {user_id}: {error}")
 
+    log_admin_action(
+        message.from_user.id,
+        "broadcast",
+        f"Отправлено: {sent_count}, ошибок: {failed_count}, текст: {truncate_text(broadcast_text, 250)}"
+    )
+
     await message.reply_text(
         "✅ Рассылка завершена\n\n"
         f"Отправлено: {sent_count}\n"
@@ -1223,30 +1636,7 @@ async def broadcast_command(client, message):
 @app.on_message(
     filters.text
     & filters.private
-    & ~filters.command(
-        [
-            "start",
-            "help",
-            "about_project",
-            "ping",
-	    "coin",
-            "dice",
-            "myid",
-            "stats",
-            "admin",
-            "test_notify",
-            "feedback",
-            "reply",
-	    "privacy",
-            "broadcast",
-	    "version",
-            "roadmap",
-	    "export_users",
-            "export_feedback",
-	    "last_feedback",
-	    "backup_db",
-        ]
-    )
+    & ~filters.command(ALL_COMMANDS + ["me"])
 )
 @handle_errors
 async def menu(client, message):
@@ -1257,9 +1647,9 @@ async def menu(client, message):
             "👨‍💻 Обо мне\n\n"
             "Привет! Меня зовут Freedomfall.\n"
             "Я изучаю Python и создаю Telegram-ботов.\n\n"
-            "Этот бот — мой первый проект для портфолио, "
-            "но он уже умеет работать со статистикой, базой данных, "
-            "админ-панелью и обратной связью."
+            "Этот бот — мой проект для портфолио: он уже умеет работать "
+            "со статистикой, базой данных, админ-панелью, логами, рассылкой "
+            "и обратной связью."
         )
 
     elif text == "🛠 Навыки":
@@ -1272,7 +1662,10 @@ async def menu(client, message):
             "• Git и GitHub\n"
             "• Railway Deploy\n"
             "• Работа с переменными окружения\n"
-            "• Основы backend-разработки"
+            "• Основы backend-разработки\n"
+            "• Обработка ошибок\n"
+            "• Антиспам и лимиты\n"
+            "• Админ-панель и CSV-экспорт"
         )
 
     elif text == "📂 Проекты":
@@ -1302,6 +1695,7 @@ async def menu(client, message):
             "💬 Связаться со мной\n\n"
             "Напиши сообщение командой:\n\n"
             "`/feedback твой текст`\n\n"
+            f"Максимальная длина: {MAX_FEEDBACK_LENGTH} символов.\n\n"
             "Пример:\n"
             "`/feedback Привет! Хочу обсудить Telegram-бота.`"
         )
@@ -1321,15 +1715,15 @@ async def menu(client, message):
     elif text == "🎲 Кубик":
         await message.reply_text(get_dice_text())
 
-    elif text == "📊 Статистика":
-        if ADMIN_ID is None:
-            await message.reply_text("⚠️ ADMIN_ID пока не задан.")
-            return
+    elif text == "👤 Профиль":
+        await message.reply_text(get_profile_text(message.from_user))
 
-        if message.from_user.id != ADMIN_ID:
+    elif text == "📊 Статистика":
+        if not is_admin_user_id(message.from_user.id):
             await message.reply_text("⛔ У тебя нет доступа к статистике.")
             return
 
+        log_admin_action(message.from_user.id, "stats_button", "Статистика через кнопку меню")
         await message.reply_text(get_stats_text())
 
     elif text == "❓ Помощь":
