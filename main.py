@@ -37,6 +37,7 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
+START_TIME = datetime.now()
 
 def ensure_db_folder_exists():
     folder = os.path.dirname(DB_PATH)
@@ -192,6 +193,22 @@ def get_stats_text():
 
     return text
 
+def get_uptime_text():
+    now = datetime.now()
+    uptime = now - START_TIME
+
+    total_seconds = int(uptime.total_seconds())
+
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+
+    return (
+        "🏓 Pong!\n\n"
+        f"⏱ Uptime: {days}д {hours}ч {minutes}м {seconds}с\n"
+        f"🕒 Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 def get_all_user_ids():
     with sqlite3.connect(DB_PATH) as conn:
@@ -385,6 +402,9 @@ admin_panel = InlineKeyboardMarkup(
             InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
         ],
         [
+            InlineKeyboardButton("🏓 Ping / Uptime", callback_data="admin_ping")
+        ],
+        [
             InlineKeyboardButton("🧪 Тест уведомления", callback_data="admin_test_notify")
         ],
         [
@@ -429,6 +449,7 @@ async def help_command(client, message):
         "/start — открыть главное меню\n"
         "/help — показать помощь\n"
         "/about_project — техническое описание проекта\n"
+	"/ping — проверить работу бота и uptime\n"
         "/feedback текст — написать автору бота\n"
         "/myid — узнать свой Telegram ID\n"
         "/stats — статистика бота, только для владельца\n"
@@ -464,6 +485,10 @@ async def about_project_command(client, message):
         "https://github.com/Freedomfall/portfolio_bot"
     )
 
+@app.on_message(filters.command("ping"))
+@handle_errors
+async def ping_command(client, message):
+    await message.reply_text(get_uptime_text())
 
 @app.on_message(filters.command("myid"))
 @handle_errors
@@ -521,6 +546,10 @@ async def callback_handler(client, callback_query):
     if data == "admin_stats":
         await callback_query.answer("Готово")
         await callback_query.message.reply_text(get_stats_text())
+
+    elif data == "admin_ping":
+        await callback_query.answer("Pong")
+        await callback_query.message.reply_text(get_uptime_text())
 
     elif data == "admin_test_notify":
         await callback_query.answer("Отправляю тест")
@@ -701,6 +730,7 @@ async def broadcast_command(client, message):
             "start",
             "help",
             "about_project",
+            "ping",
             "myid",
             "stats",
             "admin",
