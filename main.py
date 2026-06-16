@@ -43,6 +43,7 @@ app = Client(
 START_TIME = datetime.now()
 BOT_VERSION = "1.1.0"
 LAST_UPDATE = "2026-06-16"
+FEEDBACK_COOLDOWN_SECONDS = 60
 
 def ensure_db_folder_exists():
     folder = os.path.dirname(DB_PATH)
@@ -150,6 +151,36 @@ def save_feedback(user, message_text):
         )
         conn.commit()
 
+def get_feedback_wait_seconds(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT created_at
+            FROM feedback
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id,)
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return 0
+
+    try:
+        last_feedback_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+
+    now = datetime.now()
+    passed_seconds = int((now - last_feedback_time).total_seconds())
+
+    if passed_seconds >= FEEDBACK_COOLDOWN_SECONDS:
+        return 0
+
+    return FEEDBACK_COOLDOWN_SECONDS - passed_seconds
 
 def get_stats_text():
     with sqlite3.connect(DB_PATH) as conn:
@@ -676,6 +707,7 @@ async def about_project_command(client, message):
         "Этот бот — портфолио-проект на Python.\n\n"
         "Техническая часть:\n"
         "• Python\n"
+	"• Антиспам для обратной связи\n"
         "• Pyrogram\n"
         "• SQLite\n"
         "• Railway Deploy\n"
@@ -868,6 +900,15 @@ async def feedback_command(client, message):
             "Напиши сообщение после команды.\n\n"
             "Пример:\n"
             "`/feedback Привет! Хочу обсудить проект.`"
+        )
+        return
+
+        wait_seconds = get_feedback_wait_seconds(message.from_user.id)
+
+    if wait_seconds > 0:
+        await message.reply_text(
+            "⏳ Не так быстро.\n\n"
+            f"Следующее сообщение можно отправить через {wait_seconds} сек."
         )
         return
 
