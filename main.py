@@ -1756,7 +1756,7 @@ async def menu(client, message):
         await send_coin_animation(message)
 
     elif text == "🎲 Кубик":
-    await send_dice_animation(message)
+    	await send_dice_animation(message)
 
     elif text == "👤 Профиль":
         await message.reply_text(get_profile_text(message.from_user))
