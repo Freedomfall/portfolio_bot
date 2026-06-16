@@ -195,6 +195,48 @@ def get_stats_text():
 
     return text
 
+
+def get_last_feedback_text(limit=5):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_id, username, first_name, message, created_at
+            FROM feedback
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        return "💬 Последние сообщения\n\nПока нет сообщений обратной связи."
+
+    text = "💬 Последние сообщения обратной связи\n\n"
+
+    for user_id, username, first_name, message, created_at in rows:
+        if username:
+            user_label = f"@{username}"
+        elif first_name:
+            user_label = first_name
+        else:
+            user_label = str(user_id)
+
+        short_message = message
+
+        if len(short_message) > 300:
+            short_message = short_message[:300] + "..."
+
+        text += (
+            f"👤 {user_label}\n"
+            f"ID: {user_id}\n"
+            f"Дата: {created_at}\n"
+            f"Сообщение: {short_message}\n\n"
+        )
+
+    return text
+
 def get_uptime_text():
     now = datetime.now()
     uptime = now - START_TIME
@@ -499,6 +541,9 @@ admin_panel = InlineKeyboardMarkup(
             InlineKeyboardButton("💬 Экспорт feedback", callback_data="admin_export_feedback")
         ],
         [
+            InlineKeyboardButton("💬 Последние feedback", callback_data="admin_last_feedback")
+        ],
+        [
             InlineKeyboardButton("🧪 Тест уведомления", callback_data="admin_test_notify")
         ],
         [
@@ -552,6 +597,7 @@ async def help_command(client, message):
         "/reply user_id текст — ответить пользователю, только для владельца\n"
 	"/export_users — выгрузить пользователей в CSV, только для владельца\n"
 	"/export_feedback — выгрузить обратную связь в CSV, только для владельца\n"
+	"/last_feedback — показать последние сообщения обратной связи, только для владельца\n"
         "/admin — админ-панель, только для владельца\n\n"
         "Также можно пользоваться кнопками меню.",
         reply_markup=keyboard
@@ -629,7 +675,6 @@ async def admin_command(client, message):
         reply_markup=admin_panel
     )
 
-
 @app.on_callback_query()
 @handle_errors
 async def callback_handler(client, callback_query):
@@ -668,6 +713,10 @@ async def callback_handler(client, callback_query):
             file_path,
             f"💬 Экспорт обратной связи\n\nЗаписей: {rows_count}"
         )
+
+    elif data == "admin_last_feedback":
+        await callback_query.answer("Готово")
+        await callback_query.message.reply_text(get_last_feedback_text())
 
     elif data == "admin_test_notify":
         await callback_query.answer("Отправляю тест")
@@ -777,6 +826,19 @@ async def reply_command(client, message):
         await message.reply_text("✅ Ответ отправлен пользователю.")
     except Exception as error:
         await message.reply_text(f"⚠️ Не удалось отправить ответ: {error}")
+
+@app.on_message(filters.command("last_feedback"))
+@handle_errors
+async def last_feedback_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    await message.reply_text(get_last_feedback_text())
 
 @app.on_message(filters.command("export_users"))
 @handle_errors
@@ -897,6 +959,7 @@ async def broadcast_command(client, message):
             "broadcast",
 	    "export_users",
             "export_feedback",
+	    "last_feedback",
         ]
     )
 )
