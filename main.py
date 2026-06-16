@@ -530,6 +530,9 @@ admin_panel = InlineKeyboardMarkup(
     [
         [
             InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
+        ], 
+        [
+   	    InlineKeyboardButton("🗄 Backup базы", callback_data="admin_backup_db")
         ],
         [
             InlineKeyboardButton("🏓 Ping / Uptime", callback_data="admin_ping")
@@ -586,6 +589,7 @@ async def help_command(client, message):
         "❓ Помощь\n\n"
         "Доступные команды:\n\n"
         "/start — открыть главное меню\n"
+	"/backup_db — скачать резервную копию базы, только для владельца\n"
         "/help — показать помощь\n"
         "/about_project — техническое описание проекта\n"
 	"/ping — проверить работу бота и uptime\n"
@@ -718,6 +722,19 @@ async def callback_handler(client, callback_query):
         await callback_query.answer("Готово")
         await callback_query.message.reply_text(get_last_feedback_text())
 
+    elif data == "admin_backup_db":
+        await callback_query.answer("Готовлю backup")
+
+        if not os.path.exists(DB_PATH):
+            await callback_query.message.reply_text("⚠️ Файл базы данных пока не найден.")
+            return
+
+        await client.send_document(
+            callback_query.message.chat.id,
+            DB_PATH,
+            caption="🗄 Резервная копия базы данных"
+        )
+
     elif data == "admin_test_notify":
         await callback_query.answer("Отправляю тест")
         await notify_admin_about_new_user(
@@ -826,6 +843,27 @@ async def reply_command(client, message):
         await message.reply_text("✅ Ответ отправлен пользователю.")
     except Exception as error:
         await message.reply_text(f"⚠️ Не удалось отправить ответ: {error}")
+
+@app.on_message(filters.command("backup_db"))
+@handle_errors
+async def backup_db_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    if not os.path.exists(DB_PATH):
+        await message.reply_text("⚠️ Файл базы данных пока не найден.")
+        return
+
+    await client.send_document(
+        message.chat.id,
+        DB_PATH,
+        caption="🗄 Резервная копия базы данных"
+    )
 
 @app.on_message(filters.command("last_feedback"))
 @handle_errors
@@ -960,6 +998,7 @@ async def broadcast_command(client, message):
 	    "export_users",
             "export_feedback",
 	    "last_feedback",
+	    "backup_db",
         ]
     )
 )
