@@ -903,7 +903,7 @@ async def feedback_command(client, message):
         )
         return
 
-        wait_seconds = get_feedback_wait_seconds(message.from_user.id)
+    wait_seconds = get_feedback_wait_seconds(message.from_user.id)
 
     if wait_seconds > 0:
         await message.reply_text(
