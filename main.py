@@ -7,7 +7,7 @@ import tempfile
 import time
 import traceback
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from pyrogram import Client, filters
@@ -60,18 +60,23 @@ app = Client(
 # =========================
 
 START_TIME = datetime.now()
-BOT_VERSION = "1.2.0"
+BOT_VERSION = "1.3.0"
 LAST_UPDATE = "2026-06-16"
 
 FEEDBACK_COOLDOWN_SECONDS = 60
 GLOBAL_RATE_LIMIT_SECONDS = 2
+RATE_LIMIT_WARNING_COOLDOWN_SECONDS = 3
+
 MAX_FEEDBACK_LENGTH = 1500
 MAX_BROADCAST_LENGTH = 3500
 MAX_REPLY_LENGTH = 3500
+
 ADMIN_LOGS_LIMIT = 10
+DASHBOARD_TOP_LIMIT = 7
+EVENTS_EXPORT_LIMIT = 10000
 
 USER_LAST_ACTION = {}
-
+USER_LAST_WARNING = {}
 
 PUBLIC_COMMANDS = {
     "start": "открыть главное меню",
@@ -86,6 +91,7 @@ PUBLIC_COMMANDS = {
     "health": "технический health-check",
     "coin": "подбросить монетку Орёл или Решка",
     "dice": "бросить кубик от 1 до 6",
+    "game_stats": "посмотреть свою игровую статистику",
     "profile": "посмотреть свою статистику в боте",
     "myid": "узнать свой Telegram ID",
     "feedback": "написать автору бота: /feedback текст",
@@ -94,14 +100,18 @@ PUBLIC_COMMANDS = {
 ADMIN_COMMANDS = {
     "admin": "админ-панель, только для владельца",
     "stats": "статистика бота, только для владельца",
+    "dashboard": "live analytics dashboard",
+    "activity": "активность за последние дни",
+    "top_users": "топ пользователей по активности",
+    "admin_logs": "последние действия админа",
     "test_notify": "проверить уведомление админу",
     "broadcast": "рассылка всем пользователям: /broadcast текст",
     "reply": "ответить пользователю: /reply user_id текст",
     "export_users": "выгрузить пользователей в CSV",
     "export_feedback": "выгрузить обратную связь в CSV",
+    "export_events": "выгрузить события аналитики в CSV",
     "last_feedback": "последние сообщения обратной связи",
     "backup_db": "скачать резервную копию базы",
-    "admin_logs": "последние действия админа",
 }
 
 ALL_COMMANDS = list(PUBLIC_COMMANDS.keys()) + list(ADMIN_COMMANDS.keys())
@@ -113,6 +123,14 @@ ALL_COMMANDS = list(PUBLIC_COMMANDS.keys()) + list(ADMIN_COMMANDS.keys())
 
 def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today_start_text():
+    return datetime.now().strftime("%Y-%m-%d 00:00:00")
+
+
+def since_days_text(days):
+    return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def truncate_text(text, max_length):
@@ -209,6 +227,48 @@ def init_db():
                 created_at TEXT
             )
             """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                first_name TEXT,
+                event_type TEXT,
+                event_name TEXT,
+                details TEXT,
+                created_at TEXT
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS game_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                first_name TEXT,
+                game TEXT,
+                result TEXT,
+                created_at TEXT
+            )
+            """
+        )
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_results_user_id ON game_results(user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_results_created_at ON game_results(created_at)"
         )
 
 
@@ -363,6 +423,51 @@ def log_admin_action(admin_id, action, details=""):
         )
 
 
+def log_event(user, event_type, event_name, details=""):
+    if user is None:
+        return
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO events (user_id, username, first_name, event_type, event_name, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user.id,
+                user.username or "",
+                user.first_name or "",
+                truncate_text(event_type, 50),
+                truncate_text(event_name, 120),
+                truncate_text(details, 1000),
+                now_text()
+            )
+        )
+
+
+def log_game_result(user, game, result):
+    if user is None:
+        return
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO game_results (user_id, username, first_name, game, result, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user.id,
+                user.username or "",
+                user.first_name or "",
+                truncate_text(game, 50),
+                truncate_text(str(result), 50),
+                now_text()
+            )
+        )
+
+
 def get_feedback_wait_seconds(user_id):
     with db_connection() as conn:
         cursor = conn.cursor()
@@ -423,6 +528,12 @@ def get_stats_text():
         cursor.execute("SELECT COUNT(*) FROM admin_logs")
         total_admin_logs = cursor.fetchone()[0]
 
+        cursor.execute("SELECT COUNT(*) FROM events")
+        total_events = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM game_results")
+        total_games = cursor.fetchone()[0]
+
         cursor.execute(
             """
             SELECT user_id, username, first_name, launches, last_seen
@@ -438,7 +549,9 @@ def get_stats_text():
         f"👥 Уникальных пользователей: {total_users}\n"
         f"🚀 Всего запусков /start: {total_launches}\n"
         f"💬 Сообщений обратной связи: {total_feedback}\n"
-        f"🧾 Записей в admin logs: {total_admin_logs}\n\n"
+        f"🧾 Записей в admin logs: {total_admin_logs}\n"
+        f"🧠 Событий аналитики: {total_events}\n"
+        f"🎮 Игр сыграно: {total_games}\n\n"
         "Последние пользователи:\n"
     )
 
@@ -519,6 +632,299 @@ def get_admin_logs_text(limit=ADMIN_LOGS_LIMIT):
     return text
 
 
+def get_dashboard_text():
+    today_start = today_start_text()
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM events")
+        total_events = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM events WHERE created_at >= ?",
+            (today_start,)
+        )
+        active_today = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE created_at >= ?",
+            (today_start,)
+        )
+        actions_today = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE first_seen >= ?",
+            (today_start,)
+        )
+        new_users_today = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM feedback WHERE created_at >= ?",
+            (today_start,)
+        )
+        feedback_today = cursor.fetchone()[0]
+
+        cursor.execute(
+            """
+            SELECT game, COUNT(*)
+            FROM game_results
+            WHERE created_at >= ?
+            GROUP BY game
+            """,
+            (today_start,)
+        )
+        games_today = dict(cursor.fetchall())
+
+        cursor.execute(
+            """
+            SELECT event_name, COUNT(*) AS total
+            FROM events
+            WHERE created_at >= ?
+            GROUP BY event_name
+            ORDER BY total DESC
+            LIMIT ?
+            """,
+            (today_start, DASHBOARD_TOP_LIMIT)
+        )
+        top_actions = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT e.user_id, COALESCE(u.username, e.username), COALESCE(u.first_name, e.first_name), COUNT(*) AS total
+            FROM events e
+            LEFT JOIN users u ON u.user_id = e.user_id
+            WHERE e.created_at >= ?
+            GROUP BY e.user_id
+            ORDER BY total DESC
+            LIMIT 5
+            """,
+            (today_start,)
+        )
+        top_users = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT event_name, created_at
+            FROM events
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+        last_event = cursor.fetchone()
+
+    coin_today = games_today.get("coin", 0)
+    dice_today = games_today.get("dice", 0)
+    activity_percent = 0
+
+    if total_users:
+        activity_percent = round(active_today / total_users * 100, 1)
+
+    text = (
+        "📈 Live Analytics Dashboard\n\n"
+        f"👥 Пользователей всего: {total_users}\n"
+        f"🟢 Активных сегодня: {active_today} ({activity_percent}%)\n"
+        f"🆕 Новых сегодня: {new_users_today}\n"
+        f"⚡ Действий сегодня: {actions_today}\n"
+        f"🧠 Событий всего: {total_events}\n"
+        f"💬 Feedback сегодня: {feedback_today}\n"
+        f"🪙 Монетка сегодня: {coin_today}\n"
+        f"🎲 Кубик сегодня: {dice_today}\n\n"
+    )
+
+    text += "🔥 Топ действий сегодня:\n"
+
+    if top_actions:
+        for index, (event_name, total) in enumerate(top_actions, start=1):
+            text += f"{index}. {event_name} — {total}\n"
+    else:
+        text += "Пока нет действий сегодня.\n"
+
+    text += "\n🏆 Самые активные сегодня:\n"
+
+    if top_users:
+        for index, (user_id, username, first_name, total) in enumerate(top_users, start=1):
+            user_label = get_user_label(user_id, username, first_name)
+            text += f"{index}. {user_label} — {total}\n"
+    else:
+        text += "Пока нет активных пользователей сегодня.\n"
+
+    if last_event:
+        event_name, created_at = last_event
+        text += f"\n🕒 Последнее событие: {event_name} в {created_at}"
+
+    return text
+
+
+def get_activity_text(days=7):
+    since = since_days_text(days)
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT substr(created_at, 1, 10) AS event_date,
+                   COUNT(*) AS total_events,
+                   COUNT(DISTINCT user_id) AS active_users
+            FROM events
+            WHERE created_at >= ?
+            GROUP BY substr(created_at, 1, 10)
+            ORDER BY event_date DESC
+            """,
+            (since,)
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        return f"📊 Активность за {days} дней\n\nПока нет событий."
+
+    text = f"📊 Активность за последние {days} дней\n\n"
+
+    for event_date, total_events, active_users in rows:
+        text += (
+            f"• {event_date}\n"
+            f"  👥 активных: {active_users}\n"
+            f"  ⚡ действий: {total_events}\n\n"
+        )
+
+    return text
+
+
+def get_top_users_text(limit=10):
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.user_id, COALESCE(u.username, e.username), COALESCE(u.first_name, e.first_name), COUNT(*) AS total
+            FROM events e
+            LEFT JOIN users u ON u.user_id = e.user_id
+            GROUP BY e.user_id
+            ORDER BY total DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        return "🏆 Топ пользователей\n\nПока нет событий."
+
+    text = "🏆 Топ пользователей по активности\n\n"
+
+    for index, (user_id, username, first_name, total) in enumerate(rows, start=1):
+        user_label = get_user_label(user_id, username, first_name)
+        text += f"{index}. {user_label} — {total} действий\n"
+
+    return text
+
+
+def get_user_game_stats_text(user):
+    if user is None:
+        return "🎮 Игровая статистика\n\nНе удалось определить пользователя."
+
+    with db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT result, COUNT(*)
+            FROM game_results
+            WHERE user_id = ? AND game = 'coin'
+            GROUP BY result
+            """,
+            (user.id,)
+        )
+        coin_rows = dict(cursor.fetchall())
+
+        cursor.execute(
+            """
+            SELECT result, COUNT(*)
+            FROM game_results
+            WHERE user_id = ? AND game = 'dice'
+            GROUP BY result
+            ORDER BY CAST(result AS INTEGER)
+            """,
+            (user.id,)
+        )
+        dice_rows = cursor.fetchall()
+
+    coin_total = sum(coin_rows.values())
+    dice_total = sum(count for _, count in dice_rows)
+
+    text = "🎮 Твоя игровая статистика\n\n"
+
+    text += (
+        "🪙 Монетка\n"
+        f"Всего бросков: {coin_total}\n"
+        f"Орёл: {coin_rows.get('Орёл', 0)}\n"
+        f"Решка: {coin_rows.get('Решка', 0)}\n\n"
+    )
+
+    text += "🎲 Кубик\n"
+    text += f"Всего бросков: {dice_total}\n"
+
+    if dice_rows:
+        for result, count in dice_rows:
+            text += f"{result}: {count}\n"
+    else:
+        text += "Пока нет бросков кубика.\n"
+
+    return text
+
+
+def get_global_game_stats_text():
+    with db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM game_results WHERE game = 'coin'")
+        coin_total = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM game_results WHERE game = 'dice'")
+        dice_total = cursor.fetchone()[0]
+
+        cursor.execute(
+            """
+            SELECT result, COUNT(*)
+            FROM game_results
+            WHERE game = 'coin'
+            GROUP BY result
+            """
+        )
+        coin_rows = dict(cursor.fetchall())
+
+        cursor.execute(
+            """
+            SELECT result, COUNT(*)
+            FROM game_results
+            WHERE game = 'dice'
+            GROUP BY result
+            ORDER BY CAST(result AS INTEGER)
+            """
+        )
+        dice_rows = cursor.fetchall()
+
+    text = (
+        "🎮 Глобальная статистика игр\n\n"
+        "🪙 Монетка\n"
+        f"Всего: {coin_total}\n"
+        f"Орёл: {coin_rows.get('Орёл', 0)}\n"
+        f"Решка: {coin_rows.get('Решка', 0)}\n\n"
+        "🎲 Кубик\n"
+        f"Всего: {dice_total}\n"
+    )
+
+    if dice_rows:
+        for result, count in dice_rows:
+            text += f"{result}: {count}\n"
+    else:
+        text += "Пока нет бросков кубика.\n"
+
+    return text
+
+
 def get_help_text():
     public_lines = "\n".join(
         f"/{command} — {description}"
@@ -546,24 +952,29 @@ def get_about_project_text():
         "Этот бот — портфолио-проект на Python.\n\n"
         "Стандарты и архитектура:\n"
         "• Pyrogram async handlers\n"
-        "• SQLite с отдельными таблицами users, feedback и admin_logs\n"
+        "• SQLite с таблицами users, feedback, admin_logs, events и game_results\n"
+        "• Live Analytics Dashboard для владельца\n"
+        "• Event tracking всех команд, кнопок и сообщений\n"
+        "• Игровая аналитика монетки и кубика\n"
         "• Единая обработка ошибок\n"
         "• Единая антиспам-защита для пользователей\n"
         "• Ограничения длины feedback, reply и broadcast\n"
         "• Централизованные тексты help/about/version\n"
         "• Админ-панель с callback-кнопками\n"
         "• Логирование действий админа\n"
-        "• CSV-экспорт пользователей и feedback\n"
+        "• CSV-экспорт пользователей, feedback и events\n"
         "• Backup базы данных\n"
-        "• GIF/text fallback для игры с монеткой\n"
+        "• GIF/text fallback для игр\n"
         "• Railway Deploy 24/7 и Railway Volume\n\n"
         "Код проекта:\n"
         "https://github.com/Freedomfall/portfolio_bot"
     )
 
 
-def get_coin_text():
-    result = random.choice(["Орёл", "Решка"])
+def get_coin_text(result=None):
+    if result is None:
+        result = random.choice(["Орёл", "Решка"])
+
     emoji = "🦅" if result == "Орёл" else "🪙"
 
     return (
@@ -573,6 +984,9 @@ def get_coin_text():
 
 
 async def send_coin_animation(message):
+    result = random.choice(["Орёл", "Решка"])
+    log_game_result(message.from_user, "coin", result)
+
     if COIN_GIF_URL:
         try:
             animation_message = await message.reply_animation(
@@ -587,7 +1001,7 @@ async def send_coin_animation(message):
             except Exception as error:
                 print(f"Не удалось удалить GIF монетки: {error}")
 
-            await message.reply_text(get_coin_text())
+            await message.reply_text(get_coin_text(result))
             return
 
         except Exception as error:
@@ -602,7 +1016,7 @@ async def send_coin_animation(message):
     await coin_message.edit_text("🪙 Подбрасываю монетку...")
 
     await asyncio.sleep(0.5)
-    await coin_message.edit_text(get_coin_text())
+    await coin_message.edit_text(get_coin_text(result))
 
 
 def get_dice_text(number=None):
@@ -617,6 +1031,7 @@ def get_dice_text(number=None):
 
 async def send_dice_animation(message):
     number = random.randint(1, 6)
+    log_game_result(message.from_user, "dice", number)
 
     if DICE_GIF_URL:
         try:
@@ -655,14 +1070,15 @@ def get_version_text():
         "🚀 Версия бота\n\n"
         f"Версия: {BOT_VERSION}\n"
         f"Последнее обновление: {LAST_UPDATE}\n\n"
-        "Что нового в версии 1.2.0:\n"
-        "• Добавлены стандарты структуры кода\n"
-        "• Добавлена таблица admin_logs\n"
-        "• Добавлена команда /admin_logs\n"
-        "• Добавлены /menu, /profile, /status и /health\n"
-        "• Улучшена антиспам-защита\n"
-        "• Добавлены лимиты длины сообщений\n"
-        "• Улучшена анимация монетки с GIF fallback"
+        "Что нового в версии 1.3.0:\n"
+        "• Добавлен Live Analytics Dashboard\n"
+        "• Добавлена таблица events для трекинга действий\n"
+        "• Добавлена таблица game_results для статистики игр\n"
+        "• Добавлены команды /dashboard, /activity и /top_users\n"
+        "• Добавлена команда /game_stats\n"
+        "• Добавлен экспорт событий через /export_events\n"
+        "• Админ-панель получила аналитические кнопки\n"
+        "• Улучшена защита от спама и лишних предупреждений"
     )
 
 
@@ -678,8 +1094,10 @@ def get_roadmap_text():
         "• CSV export\n"
         "• Backup базы\n"
         "• Admin logs\n"
+        "• Live Analytics Dashboard\n"
+        "• Event tracking\n"
         "• Общий антиспам\n"
-        "• Мини-игры\n\n"
+        "• Мини-игры со статистикой\n\n"
         "Следующие идеи:\n"
         "• Карточки проектов с изображениями\n"
         "• Поддержка нескольких языков\n"
@@ -698,6 +1116,8 @@ def get_privacy_text():
         "• Username — чтобы автор мог понять, кто написал\n"
         "• Имя Telegram — для удобного отображения в админ-панели\n"
         "• Время первого и последнего запуска — для статистики\n"
+        "• События использования — для аналитики внутри бота\n"
+        "• Результаты мини-игр — для игровой статистики\n"
         "• Сообщения /feedback — чтобы автор мог прочитать обратную связь\n\n"
         "Данные используются только внутри этого портфолио-бота.\n"
         "Они не продаются, не передаются третьим лицам и не используются для рекламы.\n\n"
@@ -725,19 +1145,32 @@ def get_uptime_text():
 
 def get_health_text():
     db_status = "ok"
+    events_status = "ok"
 
     try:
         with db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
+
+            cursor.execute("SELECT COUNT(*) FROM events")
+            cursor.fetchone()
     except Exception as error:
         db_status = f"error: {error}"
+        events_status = "error"
+
+    admin_status = "set" if ADMIN_ID else "not set"
+    coin_gif_status = "set" if COIN_GIF_URL else "not set"
+    dice_gif_status = "set" if DICE_GIF_URL else "not set"
 
     return (
         "🟢 Health-check\n\n"
         f"Bot: ok\n"
         f"DB: {db_status}\n"
+        f"Events table: {events_status}\n"
+        f"ADMIN_ID: {admin_status}\n"
+        f"COIN_GIF_URL: {coin_gif_status}\n"
+        f"DICE_GIF_URL: {dice_gif_status}\n"
         f"Version: {BOT_VERSION}\n"
         f"Time: {now_text()}"
     )
@@ -759,6 +1192,18 @@ def get_profile_text(user):
         )
         row = cursor.fetchone()
 
+        cursor.execute(
+            "SELECT COUNT(*) FROM events WHERE user_id = ?",
+            (user.id,)
+        )
+        events_count = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM game_results WHERE user_id = ?",
+            (user.id,)
+        )
+        games_count = cursor.fetchone()[0]
+
     if not row:
         return (
             "👤 Твой профиль\n\n"
@@ -774,6 +1219,8 @@ def get_profile_text(user):
         f"Пользователь: {user_label}\n"
         f"ID: `{user.id}`\n"
         f"Запусков /start: {launches}\n"
+        f"Действий в аналитике: {events_count}\n"
+        f"Игр сыграно: {games_count}\n"
         f"Первый запуск: {first_seen}\n"
         f"Последняя активность: {last_seen}"
     )
@@ -849,6 +1296,47 @@ def create_feedback_export():
                 "username",
                 "first_name",
                 "message",
+                "created_at"
+            ]
+        )
+        writer.writerows(rows)
+
+    return temp_file.name, len(rows)
+
+
+def create_events_export(limit=EVENTS_EXPORT_LIMIT):
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, username, first_name, event_type, event_name, details, created_at
+            FROM events
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        rows = cursor.fetchall()
+
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        newline="",
+        encoding="utf-8-sig",
+        suffix=".csv"
+    )
+
+    with temp_file:
+        writer = csv.writer(temp_file)
+        writer.writerow(
+            [
+                "id",
+                "user_id",
+                "username",
+                "first_name",
+                "event_type",
+                "event_name",
+                "details",
                 "created_at"
             ]
         )
@@ -970,8 +1458,22 @@ def get_user_from_update(update):
     return None
 
 
+def cleanup_rate_limit_storage(now):
+    old_user_ids = [
+        user_id
+        for user_id, last_action_time in USER_LAST_ACTION.items()
+        if now - last_action_time > 3600
+    ]
+
+    for user_id in old_user_ids:
+        USER_LAST_ACTION.pop(user_id, None)
+        USER_LAST_WARNING.pop(user_id, None)
+
+
 def get_global_rate_limit_wait_seconds(user_id):
     now = time.monotonic()
+    cleanup_rate_limit_storage(now)
+
     last_action_time = USER_LAST_ACTION.get(user_id)
 
     if last_action_time is None:
@@ -986,6 +1488,21 @@ def get_global_rate_limit_wait_seconds(user_id):
 
     USER_LAST_ACTION[user_id] = now
     return 0
+
+
+def can_send_rate_limit_warning(user_id):
+    now = time.monotonic()
+    last_warning_time = USER_LAST_WARNING.get(user_id)
+
+    if last_warning_time is None:
+        USER_LAST_WARNING[user_id] = now
+        return True
+
+    if now - last_warning_time >= RATE_LIMIT_WARNING_COOLDOWN_SECONDS:
+        USER_LAST_WARNING[user_id] = now
+        return True
+
+    return False
 
 
 async def send_rate_limit_warning(update, wait_seconds):
@@ -1005,6 +1522,44 @@ async def send_rate_limit_warning(update, wait_seconds):
         await update.reply_text(text)
 
 
+def get_event_info_from_update(update):
+    if hasattr(update, "data") and update.data:
+        return "callback", update.data, "inline button"
+
+    if hasattr(update, "text") and update.text:
+        text = update.text.strip()
+
+        if text.startswith("/") and getattr(update, "command", None):
+            command = update.command[0].lower()
+            return "command", f"/{command}", truncate_text(text, 250)
+
+        known_buttons = {
+            "👨‍💻 Обо мне",
+            "🛠 Навыки",
+            "📂 Проекты",
+            "📬 Контакты",
+            "ℹ️ О проекте",
+            "💬 Связаться",
+            "🚀 Версия",
+            "🧭 Roadmap",
+            "🪙 Монетка",
+            "🎲 Кубик",
+            "📊 Статистика",
+            "🔐 Privacy",
+            "👤 Профиль",
+            "🎮 Игры",
+            "📈 Dashboard",
+            "❓ Помощь",
+        }
+
+        if text in known_buttons:
+            return "menu_button", text, ""
+
+        return "message", "text_message", truncate_text(text, 250)
+
+    return "message", "non_text_message", ""
+
+
 def handle_errors(handler):
     async def wrapper(client, update):
         try:
@@ -1014,11 +1569,22 @@ def handle_errors(handler):
                 wait_seconds = get_global_rate_limit_wait_seconds(user_id)
 
                 if wait_seconds > 0:
-                    await send_rate_limit_warning(update, wait_seconds)
+                    if hasattr(update, "answer") or can_send_rate_limit_warning(user_id):
+                        await send_rate_limit_warning(update, wait_seconds)
                     return
 
             user = get_user_from_update(update)
-            touch_user(user)
+            event_type, event_name, details = get_event_info_from_update(update)
+
+            try:
+                if event_name != "/start":
+                    ensure_user_record(user)
+                else:
+                    touch_user(user)
+
+                log_event(user, event_type, event_name, details)
+            except Exception as log_error:
+                print(f"Не удалось записать событие аналитики: {log_error}")
 
             return await handler(client, update)
 
@@ -1054,7 +1620,8 @@ keyboard = ReplyKeyboardMarkup(
         ["🚀 Версия", "🧭 Roadmap"],
         ["🪙 Монетка", "🎲 Кубик"],
         ["📊 Статистика", "🔐 Privacy"],
-        ["👤 Профиль", "❓ Помощь"],
+        ["👤 Профиль", "🎮 Игры"],
+        ["📈 Dashboard", "❓ Помощь"],
     ],
     resize_keyboard=True
 )
@@ -1131,6 +1698,18 @@ projects_links = InlineKeyboardMarkup(
 admin_panel = InlineKeyboardMarkup(
     [
         [
+            InlineKeyboardButton("📈 Dashboard", callback_data="admin_dashboard")
+        ],
+        [
+            InlineKeyboardButton("📊 Активность", callback_data="admin_activity")
+        ],
+        [
+            InlineKeyboardButton("🏆 Top users", callback_data="admin_top_users")
+        ],
+        [
+            InlineKeyboardButton("🎮 Game stats", callback_data="admin_game_stats")
+        ],
+        [
             InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
         ],
         [
@@ -1150,6 +1729,9 @@ admin_panel = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton("💬 Экспорт feedback", callback_data="admin_export_feedback")
+        ],
+        [
+            InlineKeyboardButton("🧠 Экспорт events", callback_data="admin_export_events")
         ],
         [
             InlineKeyboardButton("💬 Последние feedback", callback_data="admin_last_feedback")
@@ -1183,7 +1765,7 @@ async def start(client, message):
         "Привет! 👋\n\n"
         "Я портфолио-бот Python-разработчика.\n"
         "Я умею показывать проекты, принимать сообщения, собирать статистику, "
-        "работать с админ-панелью и вести admin logs.\n\n"
+        "работать с админ-панелью и вести live analytics.\n\n"
         "Выбери раздел ниже:",
         reply_markup=keyboard
     )
@@ -1228,6 +1810,12 @@ async def coin_command(client, message):
 @handle_errors
 async def dice_command(client, message):
     await send_dice_animation(message)
+
+
+@app.on_message(filters.command("game_stats"))
+@handle_errors
+async def game_stats_command(client, message):
+    await message.reply_text(get_user_game_stats_text(message.from_user))
 
 
 @app.on_message(filters.command("privacy"))
@@ -1285,6 +1873,39 @@ async def stats_command(client, message):
     await message.reply_text(get_stats_text())
 
 
+@app.on_message(filters.command("dashboard"))
+@handle_errors
+async def dashboard_command(client, message):
+    if not is_admin_user_id(message.from_user.id):
+        await message.reply_text("⛔ У тебя нет доступа к dashboard.")
+        return
+
+    log_admin_action(message.from_user.id, "dashboard", "Открыт Live Analytics Dashboard")
+    await message.reply_text(get_dashboard_text())
+
+
+@app.on_message(filters.command("activity"))
+@handle_errors
+async def activity_command(client, message):
+    if not is_admin_user_id(message.from_user.id):
+        await message.reply_text("⛔ У тебя нет доступа к активности.")
+        return
+
+    log_admin_action(message.from_user.id, "activity", "Просмотр активности за 7 дней")
+    await message.reply_text(get_activity_text())
+
+
+@app.on_message(filters.command("top_users"))
+@handle_errors
+async def top_users_command(client, message):
+    if not is_admin_user_id(message.from_user.id):
+        await message.reply_text("⛔ У тебя нет доступа к топу пользователей.")
+        return
+
+    log_admin_action(message.from_user.id, "top_users", "Просмотр топа пользователей")
+    await message.reply_text(get_top_users_text())
+
+
 @app.on_message(filters.command("admin"))
 @handle_errors
 async def admin_command(client, message):
@@ -1314,7 +1935,27 @@ async def callback_handler(client, callback_query):
 
     data = callback_query.data
 
-    if data == "admin_stats":
+    if data == "admin_dashboard":
+        await callback_query.answer("Dashboard")
+        log_admin_action(callback_query.from_user.id, "admin_dashboard", "Dashboard из админ-панели")
+        await callback_query.message.reply_text(get_dashboard_text())
+
+    elif data == "admin_activity":
+        await callback_query.answer("Активность")
+        log_admin_action(callback_query.from_user.id, "admin_activity", "Активность из админ-панели")
+        await callback_query.message.reply_text(get_activity_text())
+
+    elif data == "admin_top_users":
+        await callback_query.answer("Top users")
+        log_admin_action(callback_query.from_user.id, "admin_top_users", "Top users из админ-панели")
+        await callback_query.message.reply_text(get_top_users_text())
+
+    elif data == "admin_game_stats":
+        await callback_query.answer("Game stats")
+        log_admin_action(callback_query.from_user.id, "admin_game_stats", "Глобальная статистика игр")
+        await callback_query.message.reply_text(get_global_game_stats_text())
+
+    elif data == "admin_stats":
         await callback_query.answer("Готово")
         log_admin_action(callback_query.from_user.id, "admin_stats", "Статистика из админ-панели")
         await callback_query.message.reply_text(get_stats_text())
@@ -1356,6 +1997,18 @@ async def callback_handler(client, callback_query):
             callback_query.message.chat.id,
             file_path,
             f"💬 Экспорт обратной связи\n\nЗаписей: {rows_count}"
+        )
+
+    elif data == "admin_export_events":
+        await callback_query.answer("Готовлю events")
+        file_path, rows_count = create_events_export()
+        log_admin_action(callback_query.from_user.id, "export_events", f"Экспортировано событий: {rows_count}")
+
+        await send_csv_file(
+            client,
+            callback_query.message.chat.id,
+            file_path,
+            f"🧠 Экспорт событий аналитики\n\nЗаписей: {rows_count}"
         )
 
     elif data == "admin_last_feedback":
@@ -1602,6 +2255,24 @@ async def export_feedback_command(client, message):
     )
 
 
+@app.on_message(filters.command("export_events"))
+@handle_errors
+async def export_events_command(client, message):
+    if not is_admin_user_id(message.from_user.id):
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    file_path, rows_count = create_events_export()
+    log_admin_action(message.from_user.id, "export_events", f"Экспортировано событий: {rows_count}")
+
+    await send_csv_file(
+        client,
+        message.chat.id,
+        file_path,
+        f"🧠 Экспорт событий аналитики\n\nЗаписей: {rows_count}"
+    )
+
+
 @app.on_message(filters.command("broadcast"))
 @handle_errors
 async def broadcast_command(client, message):
@@ -1692,8 +2363,8 @@ async def menu(client, message):
             "Привет! Меня зовут Freedomfall.\n"
             "Я изучаю Python и создаю Telegram-ботов.\n\n"
             "Этот бот — мой проект для портфолио: он уже умеет работать "
-            "со статистикой, базой данных, админ-панелью, логами, рассылкой "
-            "и обратной связью."
+            "со статистикой, базой данных, админ-панелью, логами, рассылкой, "
+            "live analytics и обратной связью."
         )
 
     elif text == "🛠 Навыки":
@@ -1709,7 +2380,8 @@ async def menu(client, message):
             "• Основы backend-разработки\n"
             "• Обработка ошибок\n"
             "• Антиспам и лимиты\n"
-            "• Админ-панель и CSV-экспорт"
+            "• Админ-панель и CSV-экспорт\n"
+            "• Event tracking и analytics dashboard"
         )
 
     elif text == "📂 Проекты":
@@ -1757,10 +2429,21 @@ async def menu(client, message):
         await send_coin_animation(message)
 
     elif text == "🎲 Кубик":
-    	await send_dice_animation(message)
+        await send_dice_animation(message)
 
     elif text == "👤 Профиль":
         await message.reply_text(get_profile_text(message.from_user))
+
+    elif text == "🎮 Игры":
+        await message.reply_text(get_user_game_stats_text(message.from_user))
+
+    elif text == "📈 Dashboard":
+        if not is_admin_user_id(message.from_user.id):
+            await message.reply_text("⛔ У тебя нет доступа к dashboard.")
+            return
+
+        log_admin_action(message.from_user.id, "dashboard_button", "Dashboard через кнопку меню")
+        await message.reply_text(get_dashboard_text())
 
     elif text == "📊 Статистика":
         if not is_admin_user_id(message.from_user.id):
@@ -1782,6 +2465,16 @@ async def menu(client, message):
             "Нажми одну из кнопок ниже или используй команду /help.",
             reply_markup=keyboard
         )
+
+
+@app.on_message(filters.private & ~filters.text)
+@handle_errors
+async def non_text_message(client, message):
+    await message.reply_text(
+        "Я пока работаю с командами и кнопками меню 😅\n\n"
+        "Нажми /help или выбери кнопку ниже.",
+        reply_markup=keyboard
+    )
 
 
 init_db()
