@@ -4,6 +4,7 @@ import os
 import random
 import sqlite3
 import tempfile
+import time
 import traceback
 from datetime import datetime
 
@@ -44,6 +45,8 @@ START_TIME = datetime.now()
 BOT_VERSION = "1.1.0"
 LAST_UPDATE = "2026-06-16"
 FEEDBACK_COOLDOWN_SECONDS = 60
+GLOBAL_RATE_LIMIT_SECONDS = 5
+USER_LAST_ACTION = {}
 
 def ensure_db_folder_exists():
     folder = os.path.dirname(DB_PATH)
@@ -546,11 +549,64 @@ async def notify_admin_about_error(client, error, place="unknown"):
     except Exception as send_error:
         print(f"Не удалось отправить ошибку админу: {send_error}")
 
+def get_user_id_from_update(update):
+    if hasattr(update, "from_user") and update.from_user:
+        return update.from_user.id
+
+    if hasattr(update, "message") and update.message and update.message.from_user:
+        return update.message.from_user.id
+
+    return None
+
+
+def get_global_rate_limit_wait_seconds(user_id):
+    now = time.monotonic()
+    last_action_time = USER_LAST_ACTION.get(user_id)
+
+    if last_action_time is None:
+        USER_LAST_ACTION[user_id] = now
+        return 0
+
+    passed_seconds = now - last_action_time
+
+    if passed_seconds < GLOBAL_RATE_LIMIT_SECONDS:
+        USER_LAST_ACTION[user_id] = now
+        return max(1, int(GLOBAL_RATE_LIMIT_SECONDS - passed_seconds) + 1)
+
+    USER_LAST_ACTION[user_id] = now
+    return 0
+
+
+async def send_rate_limit_warning(update, wait_seconds):
+    text = (
+        "⏳ Не так быстро.\n\n"
+        f"Попробуй ещё раз через {wait_seconds} сек."
+    )
+
+    if hasattr(update, "answer"):
+        await update.answer(
+            f"⏳ Не так быстро. Подожди {wait_seconds} сек.",
+            show_alert=False
+        )
+        return
+
+    if hasattr(update, "reply_text"):
+        await update.reply_text(text)
 
 def handle_errors(handler):
     async def wrapper(client, update):
         try:
+            user_id = get_user_id_from_update(update)
+
+            if user_id is not None:
+                wait_seconds = get_global_rate_limit_wait_seconds(user_id)
+
+                if wait_seconds > 0:
+                    await send_rate_limit_warning(update, wait_seconds)
+                    return
+
             return await handler(client, update)
+
         except Exception as error:
             await notify_admin_about_error(client, error, handler.__name__)
 
@@ -748,6 +804,7 @@ async def about_project_command(client, message):
         "Этот бот — портфолио-проект на Python.\n\n"
         "Техническая часть:\n"
         "• Python\n"
+	"• Общая антиспам-защита команд и кнопок\n"
 	"• Антиспам для обратной связи\n"
         "• Pyrogram\n"
         "• SQLite\n"
