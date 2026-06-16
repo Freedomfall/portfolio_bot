@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import os
+import random
 import sqlite3
 import tempfile
 import traceback
@@ -238,6 +239,19 @@ def get_last_feedback_text(limit=5):
         )
 
     return text
+
+def get_coin_text():
+    result = random.choice(["Орёл", "Решка"])
+
+    if result == "Орёл":
+        emoji = "🦅"
+    else:
+        emoji = "🪙"
+
+    return (
+        "🪙 Подбрасываю монетку...\n\n"
+        f"{emoji} Результат: {result}"
+    )
 
 def get_version_text():
     return (
@@ -485,7 +499,7 @@ keyboard = ReplyKeyboardMarkup(
         ["📂 Проекты", "📬 Контакты"],
         ["ℹ️ О проекте", "💬 Связаться"],
         ["🚀 Версия", "🧭 Roadmap"],
-        ["❓ Помощь"]
+        ["🪙 Монетка", "❓ Помощь"]
     ],
     resize_keyboard=True
 )
@@ -626,6 +640,7 @@ async def help_command(client, message):
         "/help — показать помощь\n"
         "/about_project — техническое описание проекта\n"
 	"/ping — проверить работу бота и uptime\n"
+        "/coin — подбросить монетку Орёл или Решка\n"
         "/feedback текст — написать автору бота\n"
         "/myid — узнать свой Telegram ID\n"
         "/stats — статистика бота, только для владельца\n"
@@ -665,6 +680,11 @@ async def about_project_command(client, message):
         "Код проекта:\n"
         "https://github.com/Freedomfall/portfolio_bot"
     )
+
+@app.on_message(filters.command("coin"))
+@handle_errors
+async def coin_command(client, message):
+    await message.reply_text(get_coin_text())
 
 @app.on_message(filters.command("version"))
 @handle_errors
@@ -1033,6 +1053,7 @@ async def broadcast_command(client, message):
             "help",
             "about_project",
             "ping",
+	    "coin",
             "myid",
             "stats",
             "admin",
@@ -1112,6 +1133,9 @@ async def menu(client, message):
 
     elif text == "🧭 Roadmap":
         await message.reply_text(get_roadmap_text())
+
+    elif text == "🪙 Монетка":
+        await message.reply_text(get_coin_text())
 
     elif text == "❓ Помощь":
         await help_command(client, message)
