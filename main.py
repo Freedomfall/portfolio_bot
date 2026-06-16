@@ -981,6 +981,7 @@ def get_global_rate_limit_wait_seconds(user_id):
     passed_seconds = now - last_action_time
 
     if passed_seconds < GLOBAL_RATE_LIMIT_SECONDS:
+        USER_LAST_ACTION[user_id] = now
         return max(1, int(GLOBAL_RATE_LIMIT_SECONDS - passed_seconds) + 1)
 
     USER_LAST_ACTION[user_id] = now
@@ -1009,7 +1010,7 @@ def handle_errors(handler):
         try:
             user_id = get_user_id_from_update(update)
 
-            if user_id is not None and not is_admin_user_id(user_id):
+            if user_id is not None:
                 wait_seconds = get_global_rate_limit_wait_seconds(user_id)
 
                 if wait_seconds > 0:
