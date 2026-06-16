@@ -554,7 +554,7 @@ keyboard = ReplyKeyboardMarkup(
         ["ℹ️ О проекте", "💬 Связаться"],
         ["🚀 Версия", "🧭 Roadmap"],
         ["🪙 Монетка", "🎲 Кубик"],
-	["🔐 Privacy"],
+        ["📊 Статистика", "🔐 Privacy"],
         ["❓ Помощь"]
     ],
     resize_keyboard=True
@@ -1221,6 +1221,17 @@ async def menu(client, message):
 
     elif text == "🎲 Кубик":
         await message.reply_text(get_dice_text())
+
+    elif text == "📊 Статистика":
+        if ADMIN_ID is None:
+            await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+            return
+
+        if message.from_user.id != ADMIN_ID:
+            await message.reply_text("⛔ У тебя нет доступа к статистике.")
+            return
+
+        await message.reply_text(get_stats_text())
 
     elif text == "❓ Помощь":
         await help_command(client, message)
