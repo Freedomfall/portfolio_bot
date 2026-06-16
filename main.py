@@ -322,6 +322,21 @@ def get_roadmap_text():
         "Проект постоянно развивается 🚀"
     )
 
+def get_privacy_text():
+    return (
+        "🔐 Privacy / Данные пользователя\n\n"
+        "Этот бот хранит минимальные данные, необходимые для работы функций:\n\n"
+        "• Telegram ID — для статистики и ответа через бота\n"
+        "• Username — чтобы автор мог понять, кто написал\n"
+        "• Имя Telegram — для удобного отображения в админ-панели\n"
+        "• Время первого и последнего запуска — для статистики\n"
+        "• Сообщения /feedback — чтобы автор мог прочитать обратную связь\n\n"
+        "Данные используются только внутри этого портфолио-бота.\n"
+        "Они не продаются, не передаются третьим лицам и не используются для рекламы.\n\n"
+        "Если хочешь связаться с автором напрямую:\n"
+        "@freedomfall"
+    )
+
 def get_uptime_text():
     now = datetime.now()
     uptime = now - START_TIME
@@ -539,6 +554,7 @@ keyboard = ReplyKeyboardMarkup(
         ["ℹ️ О проекте", "💬 Связаться"],
         ["🚀 Версия", "🧭 Roadmap"],
         ["🪙 Монетка", "🎲 Кубик"],
+	["🔐 Privacy"],
         ["❓ Помощь"]
     ],
     resize_keyboard=True
@@ -675,6 +691,7 @@ async def help_command(client, message):
     await message.reply_text(
         "❓ Помощь\n\n"
         "Доступные команды:\n\n"
+	"/privacy — какие данные хранит бот\n"
         "/start — открыть главное меню\n"
 	"/backup_db — скачать резервную копию базы, только для владельца\n"
         "/help — показать помощь\n"
@@ -733,6 +750,10 @@ async def coin_command(client, message):
 async def dice_command(client, message):
     await message.reply_text(get_dice_text())
 
+@app.on_message(filters.command("privacy"))
+@handle_errors
+async def privacy_command(client, message):
+    await message.reply_text(get_privacy_text())
 @app.on_message(filters.command("version"))
 @handle_errors
 async def version_command(client, message):
@@ -1117,6 +1138,7 @@ async def broadcast_command(client, message):
             "test_notify",
             "feedback",
             "reply",
+	    "privacy",
             "broadcast",
 	    "version",
             "roadmap",
@@ -1190,6 +1212,9 @@ async def menu(client, message):
 
     elif text == "🧭 Roadmap":
         await message.reply_text(get_roadmap_text())
+
+    elif text == "🔐 Privacy":
+        await message.reply_text(get_privacy_text())
 
     elif text == "🪙 Монетка":
         await message.reply_text(get_coin_text())
