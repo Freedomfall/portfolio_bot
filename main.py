@@ -574,12 +574,18 @@ def get_coin_text():
 async def send_coin_animation(message):
     if COIN_GIF_URL:
         try:
-            await message.reply_animation(
+            animation_message = await message.reply_animation(
                 COIN_GIF_URL,
                 caption="🪙 Подбрасываю монетку..."
             )
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
+
+            try:
+                await animation_message.delete()
+            except Exception as error:
+                print(f"Не удалось удалить GIF монетки: {error}")
+
             await message.reply_text(get_coin_text())
             return
 
