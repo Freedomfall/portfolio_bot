@@ -284,6 +284,30 @@ def get_coin_text():
         f"{emoji} Результат: {result}"
     )
 
+
+async def send_coin_animation(message):
+    coin_message = await message.reply_text("🪙 Подбрасываю монетку.")
+
+    await asyncio.sleep(0.5)
+    await coin_message.edit_text("🪙 Подбрасываю монетку..")
+
+    await asyncio.sleep(0.5)
+    await coin_message.edit_text("🪙 Подбрасываю монетку...")
+
+    await asyncio.sleep(0.5)
+    await coin_message.edit_text(get_coin_text())
+    result = random.choice(["Орёл", "Решка"])
+
+    if result == "Орёл":
+        emoji = "🦅"
+    else:
+        emoji = "🪙"
+
+    return (
+        "🪙 Подбрасываю монетку...\n\n"
+        f"{emoji} Результат: {result}"
+    )
+
 def get_dice_text():
     number = random.randint(1, 6)
 
@@ -743,7 +767,7 @@ async def about_project_command(client, message):
 @app.on_message(filters.command("coin"))
 @handle_errors
 async def coin_command(client, message):
-    await message.reply_text(get_coin_text())
+    await send_coin_animation(message)
 
 @app.on_message(filters.command("dice"))
 @handle_errors
@@ -1217,7 +1241,7 @@ async def menu(client, message):
         await message.reply_text(get_privacy_text())
 
     elif text == "🪙 Монетка":
-        await message.reply_text(get_coin_text())
+        await send_coin_animation(message)
 
     elif text == "🎲 Кубик":
         await message.reply_text(get_dice_text())
