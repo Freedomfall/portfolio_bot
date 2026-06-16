@@ -275,6 +275,61 @@ def get_last_feedback_text(limit=5):
 
     return text
 
+def get_help_text():
+    return (
+        "❓ Помощь\n\n"
+        "Доступные команды:\n\n"
+        "/privacy — какие данные хранит бот\n"
+        "/start — открыть главное меню\n"
+        "/backup_db — скачать резервную копию базы, только для владельца\n"
+        "/help — показать помощь\n"
+        "/dice — бросить кубик от 1 до 6\n"
+        "/about_project — техническое описание проекта\n"
+        "/ping — проверить работу бота и uptime\n"
+        "/coin — подбросить монетку Орёл или Решка\n"
+        "/feedback текст — написать автору бота\n"
+        "/myid — узнать свой Telegram ID\n"
+        "/stats — статистика бота, только для владельца\n"
+        "/test_notify — проверить уведомление админу\n"
+        "/version — версия бота и последнее обновление\n"
+        "/roadmap — планы развития проекта\n"
+        "/broadcast текст — рассылка всем пользователям, только для владельца\n"
+        "/reply user_id текст — ответить пользователю, только для владельца\n"
+        "/export_users — выгрузить пользователей в CSV, только для владельца\n"
+        "/export_feedback — выгрузить обратную связь в CSV, только для владельца\n"
+        "/last_feedback — показать последние сообщения обратной связи, только для владельца\n"
+        "/admin — админ-панель, только для владельца\n\n"
+        "Также можно пользоваться кнопками меню."
+    )
+
+
+def get_about_project_text():
+    return (
+        "ℹ️ О проекте\n\n"
+        "Этот бот — портфолио-проект на Python.\n\n"
+        "Техническая часть:\n"
+        "• Python\n"
+        "• Pyrogram\n"
+        "• SQLite\n"
+        "• Railway Deploy\n"
+        "• Railway Volume для базы данных\n"
+        "• Git и GitHub\n"
+        "• .env переменные для секретов\n"
+        "• Админ-команды\n"
+        "• Обратная связь от пользователей\n"
+        "• Антиспам для обратной связи\n"
+        "• Общая антиспам-защита команд и кнопок\n"
+        "• Рассылка всем пользователям\n"
+        "• CSV-экспорт\n"
+        "• Backup базы данных\n"
+        "• Уведомления админу\n"
+        "• Обработка ошибок\n"
+        "• Мини-игры: монетка и кубик\n\n"
+        "Код проекта:\n"
+        "https://github.com/Freedomfall/portfolio_bot"
+    )
+
+
 def get_coin_text():
     result = random.choice(["Орёл", "Решка"])
 
@@ -291,14 +346,18 @@ def get_coin_text():
 
 async def send_coin_animation(message):
     if COIN_GIF_URL:
-        await message.reply_animation(
-            COIN_GIF_URL,
-            caption="🪙 Подбрасываю монетку..."
-        )
+        try:
+            await message.reply_animation(
+                COIN_GIF_URL,
+                caption="🪙 Подбрасываю монетку..."
+            )
 
-        await asyncio.sleep(2)
-        await message.reply_text(get_coin_text())
-        return
+            await asyncio.sleep(2)
+            await message.reply_text(get_coin_text())
+            return
+
+        except Exception as error:
+            print(f"Не удалось отправить GIF монетки: {error}")
 
     coin_message = await message.reply_text("🪙 Подбрасываю монетку.")
 
@@ -310,17 +369,6 @@ async def send_coin_animation(message):
 
     await asyncio.sleep(0.5)
     await coin_message.edit_text(get_coin_text())
-    result = random.choice(["Орёл", "Решка"])
-
-    if result == "Орёл":
-        emoji = "🦅"
-    else:
-        emoji = "🪙"
-
-    return (
-        "🪙 Подбрасываю монетку...\n\n"
-        f"{emoji} Результат: {result}"
-    )
 
 def get_dice_text():
     number = random.randint(1, 6)
@@ -780,29 +828,7 @@ async def start(client, message):
 @handle_errors
 async def help_command(client, message):
     await message.reply_text(
-        "❓ Помощь\n\n"
-        "Доступные команды:\n\n"
-	"/privacy — какие данные хранит бот\n"
-        "/start — открыть главное меню\n"
-	"/backup_db — скачать резервную копию базы, только для владельца\n"
-        "/help — показать помощь\n"
-        "/dice — бросить кубик от 1 до 6\n"
-        "/about_project — техническое описание проекта\n"
-	"/ping — проверить работу бота и uptime\n"
-        "/coin — подбросить монетку Орёл или Решка\n"
-        "/feedback текст — написать автору бота\n"
-        "/myid — узнать свой Telegram ID\n"
-        "/stats — статистика бота, только для владельца\n"
-        "/test_notify — проверить уведомление админу\n"
-        "/version — версия бота и последнее обновление\n"
-        "/roadmap — планы развития проекта\n"
-        "/broadcast текст — рассылка всем пользователям, только для владельца\n"
-        "/reply user_id текст — ответить пользователю, только для владельца\n"
-	"/export_users — выгрузить пользователей в CSV, только для владельца\n"
-	"/export_feedback — выгрузить обратную связь в CSV, только для владельца\n"
-	"/last_feedback — показать последние сообщения обратной связи, только для владельца\n"
-        "/admin — админ-панель, только для владельца\n\n"
-        "Также можно пользоваться кнопками меню.",
+        get_help_text(),
         reply_markup=keyboard
     )
 
@@ -810,27 +836,8 @@ async def help_command(client, message):
 @app.on_message(filters.command("about_project"))
 @handle_errors
 async def about_project_command(client, message):
-    await message.reply_text(
-        "ℹ️ О проекте\n\n"
-        "Этот бот — портфолио-проект на Python.\n\n"
-        "Техническая часть:\n"
-        "• Python\n"
-	"• Общая антиспам-защита команд и кнопок\n"
-	"• Антиспам для обратной связи\n"
-        "• Pyrogram\n"
-        "• SQLite\n"
-        "• Railway Deploy\n"
-        "• Railway Volume для базы данных\n"
-        "• Git и GitHub\n"
-        "• .env переменные для секретов\n"
-        "• Админ-команды\n"
-        "• Обратная связь от пользователей\n"
-        "• Рассылка всем пользователям\n"
-        "• Уведомления админу\n"
-        "• Обработка ошибок\n\n"
-        "Код проекта:\n"
-        "https://github.com/Freedomfall/portfolio_bot"
-    )
+    await message.reply_text(get_about_project_text())
+
 
 @app.on_message(filters.command("coin"))
 @handle_errors
@@ -1288,7 +1295,7 @@ async def menu(client, message):
         )
 
     elif text == "ℹ️ О проекте":
-        await about_project_command(client, message)
+        await message.reply_text(get_about_project_text())
 
     elif text == "💬 Связаться":
         await message.reply_text(
@@ -1326,7 +1333,10 @@ async def menu(client, message):
         await message.reply_text(get_stats_text())
 
     elif text == "❓ Помощь":
-        await help_command(client, message)
+        await message.reply_text(
+            get_help_text(),
+            reply_markup=keyboard
+        )
 
     else:
         await message.reply_text(
