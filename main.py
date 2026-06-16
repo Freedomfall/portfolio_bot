@@ -493,6 +493,12 @@ admin_panel = InlineKeyboardMarkup(
             InlineKeyboardButton("🏓 Ping / Uptime", callback_data="admin_ping")
         ],
         [
+            InlineKeyboardButton("📥 Экспорт пользователей", callback_data="admin_export_users")
+        ],
+        [
+            InlineKeyboardButton("💬 Экспорт feedback", callback_data="admin_export_feedback")
+        ],
+        [
             InlineKeyboardButton("🧪 Тест уведомления", callback_data="admin_test_notify")
         ],
         [
@@ -641,6 +647,28 @@ async def callback_handler(client, callback_query):
         await callback_query.answer("Pong")
         await callback_query.message.reply_text(get_uptime_text())
 
+    elif data == "admin_export_users":
+        await callback_query.answer("Готовлю файл")
+        file_path, rows_count = create_users_export()
+
+        await send_csv_file(
+            client,
+            callback_query.message.chat.id,
+            file_path,
+            f"📥 Экспорт пользователей\n\nЗаписей: {rows_count}"
+        )
+
+    elif data == "admin_export_feedback":
+        await callback_query.answer("Готовлю файл")
+        file_path, rows_count = create_feedback_export()
+
+        await send_csv_file(
+            client,
+            callback_query.message.chat.id,
+            file_path,
+            f"💬 Экспорт обратной связи\n\nЗаписей: {rows_count}"
+        )
+
     elif data == "admin_test_notify":
         await callback_query.answer("Отправляю тест")
         await notify_admin_about_new_user(
@@ -669,7 +697,6 @@ async def callback_handler(client, callback_query):
             "Пример:\n"
             "`/reply 123456789 Привет! Спасибо за сообщение.`"
         )
-
 
 @app.on_message(filters.command("test_notify"))
 @handle_errors
