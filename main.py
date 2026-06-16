@@ -604,13 +604,48 @@ async def send_coin_animation(message):
     await coin_message.edit_text(get_coin_text())
 
 
-def get_dice_text():
-    number = random.randint(1, 6)
+def get_dice_text(number=None):
+    if number is None:
+        number = random.randint(1, 6)
 
     return (
-        "🎲 Бросаю кубик...\n\n"
+        "🎲 Кубик брошен!\n\n"
         f"Выпало число: {number}"
     )
+
+
+async def send_dice_animation(message):
+    try:
+        dice_message = await message.reply_dice(emoji="🎲")
+
+        await asyncio.sleep(4)
+
+        if dice_message.dice:
+            number = dice_message.dice.value
+        else:
+            number = random.randint(1, 6)
+
+        try:
+            await dice_message.delete()
+        except Exception as error:
+            print(f"Не удалось удалить анимацию кубика: {error}")
+
+        await message.reply_text(get_dice_text(number))
+        return
+
+    except Exception as error:
+        print(f"Не удалось отправить анимацию кубика: {error}")
+
+    dice_message = await message.reply_text("🎲 Бросаю кубик.")
+
+    await asyncio.sleep(0.5)
+    await dice_message.edit_text("🎲 Бросаю кубик..")
+
+    await asyncio.sleep(0.5)
+    await dice_message.edit_text("🎲 Бросаю кубик...")
+
+    await asyncio.sleep(0.5)
+    await dice_message.edit_text(get_dice_text())
 
 
 def get_version_text():
@@ -1189,7 +1224,7 @@ async def coin_command(client, message):
 @app.on_message(filters.command("dice"))
 @handle_errors
 async def dice_command(client, message):
-    await message.reply_text(get_dice_text())
+    await send_dice_animation(message)
 
 
 @app.on_message(filters.command("privacy"))
@@ -1719,7 +1754,7 @@ async def menu(client, message):
         await send_coin_animation(message)
 
     elif text == "🎲 Кубик":
-        await message.reply_text(get_dice_text())
+        await send_dice_animation(message)
 
     elif text == "👤 Профиль":
         await message.reply_text(get_profile_text(message.from_user))
