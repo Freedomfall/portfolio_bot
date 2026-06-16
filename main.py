@@ -1,6 +1,8 @@
 import asyncio
+import csv
 import os
 import sqlite3
+import tempfile
 import traceback
 from datetime import datetime
 
@@ -209,6 +211,92 @@ def get_uptime_text():
         f"⏱ Uptime: {days}д {hours}ч {minutes}м {seconds}с\n"
         f"🕒 Запущен: {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}"
     )
+def create_users_export():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT user_id, username, first_name, launches, first_seen, last_seen
+            FROM users
+            ORDER BY last_seen DESC
+            """
+        )
+        rows = cursor.fetchall()
+
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        newline="",
+        encoding="utf-8-sig",
+        suffix=".csv"
+    )
+
+    with temp_file:
+        writer = csv.writer(temp_file)
+        writer.writerow(
+            [
+                "user_id",
+                "username",
+                "first_name",
+                "launches",
+                "first_seen",
+                "last_seen"
+            ]
+        )
+        writer.writerows(rows)
+
+    return temp_file.name, len(rows)
+
+
+def create_feedback_export():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, user_id, username, first_name, message, created_at
+            FROM feedback
+            ORDER BY created_at DESC
+            """
+        )
+        rows = cursor.fetchall()
+
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        newline="",
+        encoding="utf-8-sig",
+        suffix=".csv"
+    )
+
+    with temp_file:
+        writer = csv.writer(temp_file)
+        writer.writerow(
+            [
+                "id",
+                "user_id",
+                "username",
+                "first_name",
+                "message",
+                "created_at"
+            ]
+        )
+        writer.writerows(rows)
+
+    return temp_file.name, len(rows)
+
+
+async def send_csv_file(client, chat_id, file_path, caption):
+    try:
+        await client.send_document(
+            chat_id,
+            file_path,
+            caption=caption
+        )
+    finally:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
 
 def get_all_user_ids():
     with sqlite3.connect(DB_PATH) as conn:
@@ -456,6 +544,8 @@ async def help_command(client, message):
         "/test_notify — проверить уведомление админу\n"
         "/broadcast текст — рассылка всем пользователям, только для владельца\n"
         "/reply user_id текст — ответить пользователю, только для владельца\n"
+	"/export_users — выгрузить пользователей в CSV, только для владельца\n"
+	"/export_feedback — выгрузить обратную связь в CSV, только для владельца\n"
         "/admin — админ-панель, только для владельца\n\n"
         "Также можно пользоваться кнопками меню.",
         reply_markup=keyboard
@@ -661,6 +751,46 @@ async def reply_command(client, message):
     except Exception as error:
         await message.reply_text(f"⚠️ Не удалось отправить ответ: {error}")
 
+@app.on_message(filters.command("export_users"))
+@handle_errors
+async def export_users_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    file_path, rows_count = create_users_export()
+
+    await send_csv_file(
+        client,
+        message.chat.id,
+        file_path,
+        f"📥 Экспорт пользователей\n\nЗаписей: {rows_count}"
+    )
+
+
+@app.on_message(filters.command("export_feedback"))
+@handle_errors
+async def export_feedback_command(client, message):
+    if ADMIN_ID is None:
+        await message.reply_text("⚠️ ADMIN_ID пока не задан.")
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("⛔ У тебя нет доступа к этой команде.")
+        return
+
+    file_path, rows_count = create_feedback_export()
+
+    await send_csv_file(
+        client,
+        message.chat.id,
+        file_path,
+        f"💬 Экспорт обратной связи\n\nЗаписей: {rows_count}"
+    )
 
 @app.on_message(filters.command("broadcast"))
 @handle_errors
@@ -738,6 +868,8 @@ async def broadcast_command(client, message):
             "feedback",
             "reply",
             "broadcast",
+	    "export_users",
+            "export_feedback",
         ]
     )
 )
