@@ -30,6 +30,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 DB_PATH = os.getenv("DB_PATH", "bot_stats.db")
 COIN_GIF_URL = os.getenv("COIN_GIF_URL", "")
+DICE_GIF_URL = os.getenv("DICE_GIF_URL", "")
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
     raise RuntimeError(
@@ -615,26 +616,27 @@ def get_dice_text(number=None):
 
 
 async def send_dice_animation(message):
-    try:
-        dice_message = await message.reply_dice(emoji="🎲")
+    number = random.randint(1, 6)
 
-        await asyncio.sleep(4)
-
-        if dice_message.dice:
-            number = dice_message.dice.value
-        else:
-            number = random.randint(1, 6)
-
+    if DICE_GIF_URL:
         try:
-            await dice_message.delete()
+            dice_gif_message = await message.reply_animation(
+                DICE_GIF_URL,
+                caption="🎲 Бросаю кубик..."
+            )
+
+            await asyncio.sleep(4)
+
+            try:
+                await dice_gif_message.delete()
+            except Exception as error:
+                print(f"Не удалось удалить GIF кубика: {error}")
+
+            await message.reply_text(get_dice_text(number))
+            return
+
         except Exception as error:
-            print(f"Не удалось удалить анимацию кубика: {error}")
-
-        await message.reply_text(get_dice_text(number))
-        return
-
-    except Exception as error:
-        print(f"Не удалось отправить анимацию кубика: {error}")
+            print(f"Не удалось отправить GIF кубика: {error}")
 
     dice_message = await message.reply_text("🎲 Бросаю кубик.")
 
@@ -645,7 +647,7 @@ async def send_dice_animation(message):
     await dice_message.edit_text("🎲 Бросаю кубик...")
 
     await asyncio.sleep(0.5)
-    await dice_message.edit_text(get_dice_text())
+    await dice_message.edit_text(get_dice_text(number))
 
 
 def get_version_text():
@@ -1754,7 +1756,7 @@ async def menu(client, message):
         await send_coin_animation(message)
 
     elif text == "🎲 Кубик":
-        await send_dice_animation(message)
+    await send_dice_animation(message)
 
     elif text == "👤 Профиль":
         await message.reply_text(get_profile_text(message.from_user))
